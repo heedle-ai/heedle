@@ -94,12 +94,15 @@ jobs:
         working-directory: heedle
         run: bash .github/invariants.sh
       - name: e2e
-        # heedle up against a real Temporal dev server (the SDK downloads
-        # the CLI).
+        # heedle up against a real Temporal dev server: the temporal CLI,
+        # from Temporal's installer.
         working-directory: heedle
         env:
           HEEDLE_E2E: "1"
         run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          temporal --version
           go test -count=1 -v -run 'TestE2E_' . | tee e2e.log
           if grep -q -- '--- SKIP' e2e.log; then echo 'a test skipped'; exit 1; fi
           grep -q -- '--- PASS: TestE2E_Up' e2e.log

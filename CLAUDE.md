@@ -48,13 +48,14 @@ why the existing tool can't do it.
 8. **Get an independent review before significant pushes.** A fresh
    reviewer that hasn't seen the work tries to break it; every finding
    becomes an invariant row.
+
 ## Repo-specific
 
 - **heedle adds nothing but `up`.** Every other command is `loom/cli.Run`
   or `drawdown/app.Run`, unchanged; change behaviour there, not here
   (`TestInv_HeedleIsLoomAndDrawdown`).
-- **`heedle up` uses the real tools:** Temporal's dev server through the
-  Go SDK's `testsuite.StartDevServer` (the `temporal` CLI), and `podman
+- **`heedle up` uses the real tools:** the `temporal` CLI's dev server
+  (run directly, so heedle can see it exit and stop it), and `podman
   machine` on macOS. It never reimplements or patches them.
 - **Releases are GoReleaser's** (`.goreleaser.yaml`). Nothing is published
   until bobbin, reed, pirn and treadle are public; CI's `release` step

@@ -13,9 +13,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/testsuite"
 
 	"github.com/heedle-ai/drawdown/app"
 )
@@ -28,9 +29,11 @@ type system struct {
 	lookPath func(string) (string, error)
 	// output runs a program and returns its standard output.
 	output func(ctx context.Context, name string, args ...string) ([]byte, error)
-	// temporal starts Temporal's dev server and returns its frontend
-	// address and a function that stops it.
-	temporal func(ctx context.Context, o testsuite.DevServerOptions) (string, func() error, error)
+	// temporal starts Temporal's dev server (path, with args), writing its
+	// output to log, waits until its frontend at hostPort answers, and
+	// returns a function that stops it. If it can't, nothing is left
+	// running.
+	temporal func(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (stop func() error, err error)
 	// serve serves the UI and a worker until ctx ends (drawdown's app.Run).
 	serve func(ctx context.Context, args []string, out io.Writer) error
 }
@@ -50,13 +53,7 @@ func (s system) withDefaults(out io.Writer) system {
 		}
 	}
 	if s.temporal == nil {
-		s.temporal = func(ctx context.Context, o testsuite.DevServerOptions) (string, func() error, error) {
-			srv, err := testsuite.StartDevServer(ctx, o)
-			if err != nil {
-				return "", nil, err
-			}
-			return srv.FrontendHostPort(), srv.Stop, nil
-		}
+		s.temporal = startTemporal
 	}
 	if s.serve == nil {
 		s.serve = app.Run
@@ -64,13 +61,12 @@ func (s system) withDefaults(out io.Writer) system {
 	return s
 }
 
-// up starts Temporal's dev server (the temporal CLI on the PATH, or the
-// one Temporal's Go SDK downloads), keeping its state in the home
-// directory, then serves the UI with a worker against it until ctx ends,
-// and stops Temporal. On macOS it first makes sure Podman's virtual
-// machine exists and runs, since container, agent and browse steps need
-// it. Flags after -- go to the UI (drawdown's flags, such as
-// -agent-image).
+// up starts Temporal's dev server (the temporal CLI on the PATH),
+// keeping its state in the home directory, then serves the UI with a
+// worker against it until ctx ends, and stops Temporal. On macOS it first
+// makes sure Podman's virtual machine exists and runs, since container,
+// agent and browse steps need it. Flags after -- go to the UI (drawdown's
+// flags, such as -agent-image), except the ones up sets itself.
 func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	sys = sys.withDefaults(out)
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
@@ -92,6 +88,12 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q (flags for the UI go after --)", fs.Arg(0))
 	}
+	for _, a := range uiArgs {
+		name := strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-")
+		if strings.HasPrefix(a, "-") && ownFlags[name] {
+			return fmt.Errorf("heedle up sets -%s itself; use -home, -listen or -temporal-port instead of passing it after --", name)
+		}
+	}
 	if *home == "" {
 		return errors.New("no home directory: give -home DIR")
 	}
@@ -101,38 +103,103 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	if _, err := sys.lookPath("git"); err != nil {
 		return errors.New("heedle needs Git 2.42 or later on the PATH (macOS: brew install git; Linux: your package manager)")
 	}
+	temporal, err := sys.lookPath("temporal")
+	if err != nil {
+		return errors.New("heedle needs the Temporal CLI on the PATH (macOS: brew install temporal; Linux: curl -sSf https://temporal.download/cli.sh | sh)")
+	}
+	// A Temporal already on these ports would answer for ours, with
+	// another database, and outlive heedle (review 21).
+	hostPort := net.JoinHostPort("127.0.0.1", strconv.Itoa(*port))
+	temporalUI := net.JoinHostPort("127.0.0.1", strconv.Itoa(*uiPort))
+	for _, a := range []string{hostPort, temporalUI} {
+		l, err := net.Listen("tcp", a)
+		if err != nil {
+			return fmt.Errorf("%s is in use: is another Temporal (temporal server start-dev) running? Stop it, or give -temporal-port and -temporal-ui-port", a)
+		}
+		l.Close()
+	}
 	if err := checkPodman(ctx, sys, out); err != nil {
 		return err
 	}
 
-	opts := testsuite.DevServerOptions{
-		ClientOptions:  &client.Options{HostPort: net.JoinHostPort("127.0.0.1", strconv.Itoa(*port)), Namespace: "default"},
-		CachedDownload: testsuite.CachedDownload{DestDir: filepath.Join(*home, "bin")},
-		DBFilename:     filepath.Join(*home, "temporal.db"),
-		EnableUI:       true,
-		UIPort:         strconv.Itoa(*uiPort),
-		LogLevel:       "warn",
-	}
-	if path, err := sys.lookPath("temporal"); err == nil {
-		opts.ExistingPath = path
-	} else {
-		fmt.Fprintf(out, "temporal isn't on the PATH; using the one Temporal's SDK downloads to %s\n", opts.CachedDownload.DestDir)
-	}
 	logFile, err := os.OpenFile(filepath.Join(*home, "temporal.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer logFile.Close()
-	opts.Stdout, opts.Stderr = logFile, logFile
-	hostPort, stop, err := sys.temporal(ctx, opts)
+	stop, err := sys.temporal(ctx, temporal, []string{"server", "start-dev",
+		"--ip", "127.0.0.1", "--port", strconv.Itoa(*port), "--ui-port", strconv.Itoa(*uiPort),
+		"--namespace", "default", "--db-filename", filepath.Join(*home, "temporal.db"), "--log-level", "warn"}, logFile, hostPort)
 	if err != nil {
 		return fmt.Errorf("starting Temporal (its log: %s): %w", logFile.Name(), err)
 	}
 	defer stop()
-	temporalUI := "http://127.0.0.1:" + opts.UIPort
-	fmt.Fprintf(out, "Temporal on %s (Web UI %s, log %s)\n", hostPort, temporalUI, logFile.Name())
-	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", temporalUI, "-listen", *listen}, uiArgs...), out)
+	fmt.Fprintf(out, "Temporal on %s (Web UI http://%s, log %s)\n", hostPort, temporalUI, logFile.Name())
+	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen}, uiArgs...), out)
 }
+
+// ownFlags are drawdown's flags heedle up sets; passing them after --
+// would quietly point the UI at another store or Temporal.
+var ownFlags = map[string]bool{"store": true, "address": true, "temporal-ui": true, "listen": true}
+
+// TemporalReady bounds how long Temporal's dev server may take to answer.
+var TemporalReady = time.Minute
+
+// startTemporal runs Temporal's dev server and waits until its frontend
+// answers a health check. It stops it with an interrupt (then a kill
+// after WaitDelay) when stopped, and if it exits, ctx ends or it doesn't
+// answer in time, it reports why and leaves nothing running.
+func startTemporal(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (func() error, error) {
+	run, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(run, path, args...)
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 10 * time.Second
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	stop := func() error {
+		cancel()
+		err := <-exited
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && !exit.Exited() {
+			return nil // ended by our interrupt
+		}
+		return err
+	}
+	deadline := time.After(TemporalReady)
+	for {
+		c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quiet{}, ConnectionOptions: client.ConnectionOptions{GetSystemInfoTimeout: time.Second}})
+		if err == nil {
+			c.Close()
+			return stop, nil
+		}
+		select {
+		case err := <-exited:
+			cancel()
+			return nil, fmt.Errorf("it exited: %v", err)
+		case <-ctx.Done():
+			stop()
+			return nil, ctx.Err()
+		case <-deadline:
+			stop()
+			return nil, fmt.Errorf("it didn't answer on %s within %v", hostPort, TemporalReady)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// quiet is a Temporal SDK logger that logs nothing: failed dials while
+// Temporal starts are expected.
+type quiet struct{}
+
+func (quiet) Debug(string, ...any) {}
+func (quiet) Info(string, ...any)  {}
+func (quiet) Warn(string, ...any)  {}
+func (quiet) Error(string, ...any) {}
 
 // defaultHome is ~/.heedle, or "" without a home directory.
 func defaultHome() string {
@@ -160,8 +227,9 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 		return fmt.Errorf("podman machine list: %w", err)
 	}
 	var machines []struct {
-		Name    string
-		Running bool
+		Name             string
+		Default, Running bool
+		Starting         bool
 	}
 	if err := json.Unmarshal(b, &machines); err != nil {
 		return fmt.Errorf("podman machine list: %w", err)
@@ -169,17 +237,28 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 	if len(machines) == 0 {
 		fmt.Fprintln(out, "Creating Podman's virtual machine (podman machine init; this takes a few minutes, once)…")
 		if _, err := sys.output(ctx, podman, "machine", "init"); err != nil {
-			return fmt.Errorf("podman machine init: %w", err)
+			return fmt.Errorf("podman machine init: %w (if it left a machine half made, remove it with podman machine rm, then run heedle up again)", err)
 		}
+		fmt.Fprintln(out, "Starting Podman's virtual machine (podman machine start)…")
+		if _, err := sys.output(ctx, podman, "machine", "start"); err != nil {
+			return fmt.Errorf("podman machine start: %w", err)
+		}
+		return nil
 	}
+	// Podman runs one machine at a time; one already running or starting
+	// is used as it is (review 21).
+	name := machines[0].Name
 	for _, m := range machines {
-		if m.Running {
+		if m.Running || m.Starting {
 			return nil
 		}
+		if m.Default {
+			name = m.Name
+		}
 	}
-	fmt.Fprintln(out, "Starting Podman's virtual machine (podman machine start)…")
-	if _, err := sys.output(ctx, podman, "machine", "start"); err != nil {
-		return fmt.Errorf("podman machine start: %w", err)
+	fmt.Fprintf(out, "Starting Podman's virtual machine %s (podman machine start)…\n", name)
+	if _, err := sys.output(ctx, podman, "machine", "start", name); err != nil {
+		return fmt.Errorf("podman machine start %s: %w", name, err)
 	}
 	return nil
 }
