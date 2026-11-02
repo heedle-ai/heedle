@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command in a pipe fails the step
+    # (the default, bash -e, ignores it).
+    shell: bash
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]   # Linux amd64, Linux arm64, macOS Apple Silicon
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: heedle
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/loom
+          path: loom
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/drawdown
+          path: drawdown
+      - uses: actions/checkout@v4      # go.mod replaces the heedle-ai modules with ../
+        with:
+          repository: heedle-ai/weft
+          path: weft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/shuttle
+          path: shuttle
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/draft
+          path: draft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/warp
+          path: warp
+      - name: private-bobbin
+        # read-only deploy key on heedle-ai/bobbin
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/bobbin
+          path: bobbin
+          ssh-key: ${{ secrets.BOBBIN_DEPLOY_KEY }}
+      - name: private-reed
+        # read-only deploy key on heedle-ai/reed
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/reed
+          path: reed
+          ssh-key: ${{ secrets.REED_DEPLOY_KEY }}
+      - name: private-pirn
+        # read-only deploy key on heedle-ai/pirn
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/pirn
+          path: pirn
+          ssh-key: ${{ secrets.PIRN_DEPLOY_KEY }}
+      - name: private-treadle
+        # read-only deploy key on heedle-ai/treadle
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/treadle
+          path: treadle
+          ssh-key: ${{ secrets.TREADLE_DEPLOY_KEY }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: heedle/go.mod
+          cache-dependency-path: heedle/go.sum
+      - name: gofmt
+        working-directory: heedle
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        working-directory: heedle
+        run: go vet ./...
+      - name: test
+        working-directory: heedle
+        run: go test -race ./...
+      - name: invariants
+        working-directory: heedle
+        run: bash .github/invariants.sh
+      - name: e2e
+        # heedle up against a real Temporal dev server (the SDK downloads
+        # the CLI).
+        working-directory: heedle
+        env:
+          HEEDLE_E2E: "1"
+        run: |
+          go test -count=1 -v -run 'TestE2E_' . | tee e2e.log
+          if grep -q -- '--- SKIP' e2e.log; then echo 'a test skipped'; exit 1; fi
+          grep -q -- '--- PASS: TestE2E_Up' e2e.log
+      - name: release
+        # The GoReleaser configuration is valid and builds exactly the
+        # supported platforms; nothing is published.
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: heedle
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfLo goreleaser.tgz https://github.com/goreleaser/goreleaser/releases/download/v2.12.7/goreleaser_Linux_x86_64.tar.gz
+          echo "de95c5d1e728e18753c3ddcf02974d63d6432f0a7355a5afa6813971a95a01b8  goreleaser.tgz" | sha256sum -c
+          tar -xzf goreleaser.tgz goreleaser
+          cd "$GITHUB_WORKSPACE/heedle"
+          "$RUNNER_TEMP/goreleaser" check
+          "$RUNNER_TEMP/goreleaser" release --snapshot --clean
+          got=$(cd dist && ls *.tar.gz | sed -E 's/^heedle_[^_]+_//' | sort | tr '\n' ' ')
+          test "$got" = "darwin_arm64.tar.gz linux_amd64.tar.gz linux_arm64.tar.gz " || { echo "built: $got"; exit 1; }
+          grep -q 'depends_on formula' dist/homebrew/Casks/heedle.rb
