@@ -26,6 +26,12 @@ Ctrl-C lets requests in flight finish, stops the UI and the worker, then interru
 
 ## Releases
 
-`.goreleaser.yaml` builds heedle for Linux (amd64, arm64) and macOS on Apple Silicon. It writes a Homebrew cask for `heedle-ai/homebrew-tap` that depends on `git`, `podman` and `temporal`. CI checks the configuration and builds a snapshot on every push (`ci:release`). Nothing is uploaded yet.
+Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`, which runs GoReleaser (`.goreleaser.yaml`):
 
-**Planned:** publishing releases and the tap, once bobbin, reed, pirn and treadle are public. A published binary contains their code.
+1. It builds heedle for Linux (amd64, arm64) and macOS on Apple Silicon.
+2. It makes a GitHub release of heedle-ai/heedle with those archives and their checksums, using the workflow's own token.
+3. It pushes a Homebrew cask to heedle-ai/homebrew-tap, using the `HOMEBREW_TAP_DEPLOY_KEY` secret, a deploy key that may write to the tap and nothing else. The cask depends on `git`, `podman` and `temporal`.
+
+Both repositories are private, and a release contains bobbin's, reed's, pirn's and treadle's code, so only people with access can install it. A private release's download URL answers 404 without a token, so the cask downloads with `HeedlePrivateReleaseDownloadStrategy`, defined in the cask itself. It reads `HOMEBREW_GITHUB_API_TOKEN` when it downloads, looks up the archive's asset ID with GitHub's REST API, and downloads the asset through that API. It builds on Homebrew's `CurlDownloadStrategy`, which isn't a public API, so a Homebrew update may need it adjusted. Without Homebrew, `gh release download --repo heedle-ai/heedle --pattern '*darwin_arm64.tar.gz'` gets the same archive.
+
+CI checks all this on every push without publishing (`ci:release`). It checks the configuration, builds a snapshot of exactly the supported platforms, and checks that the cask is valid Ruby and downloads every archive through that strategy.

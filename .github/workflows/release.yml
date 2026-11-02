@@ -1,0 +1,100 @@
+name: Release
+
+# Pushing a v* tag builds heedle with GoReleaser, makes a GitHub release of
+# this (private) repository, and pushes the Homebrew cask to the private
+# heedle-ai/homebrew-tap with a deploy key that may write only there.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # the release, with the workflow's own token
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command in a pipe fails the step
+    # (the default, bash -e, ignores it).
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: heedle
+          fetch-depth: 0 # GoReleaser reads the tags
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/loom
+          path: loom
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/drawdown
+          path: drawdown
+      - uses: actions/checkout@v4      # go.mod replaces the heedle-ai modules with ../
+        with:
+          repository: heedle-ai/weft
+          path: weft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/shuttle
+          path: shuttle
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/draft
+          path: draft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/warp
+          path: warp
+      - name: private-bobbin
+        # read-only deploy key on heedle-ai/bobbin
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/bobbin
+          path: bobbin
+          ssh-key: ${{ secrets.BOBBIN_DEPLOY_KEY }}
+      - name: private-reed
+        # read-only deploy key on heedle-ai/reed
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/reed
+          path: reed
+          ssh-key: ${{ secrets.REED_DEPLOY_KEY }}
+      - name: private-pirn
+        # read-only deploy key on heedle-ai/pirn
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/pirn
+          path: pirn
+          ssh-key: ${{ secrets.PIRN_DEPLOY_KEY }}
+      - name: private-treadle
+        # read-only deploy key on heedle-ai/treadle
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/treadle
+          path: treadle
+          ssh-key: ${{ secrets.TREADLE_DEPLOY_KEY }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: heedle/go.mod
+          cache-dependency-path: heedle/go.sum
+      - name: goreleaser
+        working-directory: heedle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          test -n "$HOMEBREW_TAP_DEPLOY_KEY" || { echo "::error::Set the HOMEBREW_TAP_DEPLOY_KEY secret (a write deploy key on heedle-ai/homebrew-tap)."; exit 1; }
+          cd "$RUNNER_TEMP"
+          curl -sSfLo goreleaser.tgz https://github.com/goreleaser/goreleaser/releases/download/v2.12.7/goreleaser_Linux_x86_64.tar.gz
+          echo "de95c5d1e728e18753c3ddcf02974d63d6432f0a7355a5afa6813971a95a01b8  goreleaser.tgz" | sha256sum -c
+          tar -xzf goreleaser.tgz goreleaser
+          cd "$GITHUB_WORKSPACE/heedle"
+          "$RUNNER_TEMP/goreleaser" release --clean

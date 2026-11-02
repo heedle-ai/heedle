@@ -24,7 +24,18 @@ go build -o heedle .
 ./heedle version
 ```
 
-**Planned:** `brew install heedle-ai/tap/heedle`, once those repositories are public. The release configuration is in `.goreleaser.yaml`; see [How It Works → Releases](How-It-Works#releases).
+### Or install it with Homebrew (macOS on Apple Silicon)
+
+heedle's releases and its tap are private, so Homebrew downloads with your GitHub token. You need access to heedle-ai/heedle and heedle-ai/homebrew-tap.
+
+```sh
+export HOMEBREW_GITHUB_API_TOKEN=$(gh auth token)
+brew tap heedle-ai/tap git@github.com:heedle-ai/homebrew-tap.git
+brew install --cask heedle-ai/tap/heedle
+heedle version
+```
+
+This also installs Git, Podman and the Temporal CLI. Keep `HOMEBREW_GITHUB_API_TOKEN` set when you upgrade (`brew upgrade --cask heedle`).
 
 ## Start everything
 

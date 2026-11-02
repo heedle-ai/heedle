@@ -1,7 +1,9 @@
-# GoReleaser (v2) builds heedle for the platforms heedle supports and
-# writes its Homebrew cask. CI runs `goreleaser check` and a snapshot
-# build on every push; nothing is published until bobbin, reed, pirn
-# and treadle are public (then: tag, and goreleaser release).
+# GoReleaser (v2) builds heedle for the platforms heedle supports, makes
+# a GitHub release of heedle-ai/heedle, and pushes a Homebrew cask to
+# heedle-ai/homebrew-tap. Both repositories are private: the cask
+# downloads with the installer's own GitHub token (see custom_block).
+# CI checks this and builds a snapshot on every push; pushing a v* tag
+# releases (.github/workflows/release.yml).
 version: 2
 project_name: heedle
 
@@ -33,9 +35,52 @@ homebrew_casks:
     repository:
       owner: heedle-ai
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    # Until the private repos are public, nothing is uploaded.
-    skip_upload: true
+      git:
+        url: git@github.com:heedle-ai/homebrew-tap.git
+        # A deploy key that may write to the tap, and nothing else.
+        private_key: '{{ envOrDefault "HOMEBREW_TAP_DEPLOY_KEY" "" }}'
+    url:
+      template: "https://github.com/heedle-ai/heedle/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      using: HeedlePrivateReleaseDownloadStrategy
+    # The releases are private, so the cask downloads through GitHub's
+    # REST API with the token in HOMEBREW_GITHUB_API_TOKEN, read when it
+    # downloads. CurlDownloadStrategy, curl_output and curl_download are
+    # Homebrew's own; Homebrew has no public API for this, so a Homebrew
+    # update may need this adjusted.
+    custom_block: |
+      require "json"
+
+      class HeedlePrivateReleaseDownloadStrategy < CurlDownloadStrategy
+        RELEASE_ASSET = %r{\Ahttps://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/]+)\z}
+
+        private
+
+        # Homebrew probes the URL before downloading; a private release's
+        # URL answers 404 without a token, so take it as it is.
+        def resolve_url_basename_time_file_size(url, timeout: nil)
+          [url, File.basename(URI(url).path), nil, nil, nil, false]
+        end
+
+        def _fetch(url:, resolved_url:, timeout:)
+          m = RELEASE_ASSET.match(url)
+          raise "not a GitHub release asset" unless m
+          owner, repo, tag, file = m.captures
+          token = ENV.fetch("HOMEBREW_GITHUB_API_TOKEN", "")
+          if token.empty?
+            raise "heedle is private: export HOMEBREW_GITHUB_API_TOKEN=$(gh auth token), then install again"
+          end
+          api = "https://api.github.com/repos/#{owner}/#{repo}/releases"
+          auth = ["--header", "Authorization: Bearer #{token}", "--header", "X-GitHub-Api-Version: 2022-11-28"]
+          release = curl_output(*auth, "--fail", "#{api}/tags/#{tag}")
+          unless release.success?
+            raise "can't read release #{tag} of #{owner}/#{repo}: does the token have access to it?"
+          end
+          asset = JSON.parse(release.stdout).fetch("assets", []).find { |a| a["name"] == file }
+          raise "release #{tag} has no #{file}" unless asset
+          curl_download("#{api}/assets/#{asset["id"]}", *auth, "--header", "Accept: application/octet-stream",
+                        to: temporary_path, timeout: timeout)
+        end
+      end
     dependencies:
       - formula: git
       - formula: podman
