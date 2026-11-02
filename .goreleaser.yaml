@@ -49,49 +49,62 @@ homebrew_casks:
     # update may need this adjusted.
     custom_block: |
       require "json"
+      require "tempfile"
 
-      class HeedlePrivateReleaseDownloadStrategy < CurlDownloadStrategy
-        RELEASE_ASSET = %r{\Ahttps://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/]+)\z}
+      unless defined?(HeedlePrivateReleaseDownloadStrategy)
+        class HeedlePrivateReleaseDownloadStrategy < CurlDownloadStrategy
+          private
 
-        private
-
-        # Homebrew probes the URL before downloading; a private release's
-        # URL answers 404 without a token, so take it as it is.
-        def resolve_url_basename_time_file_size(url, timeout: nil)
-          [url, File.basename(URI(url).path), nil, nil, nil, false]
-        end
-
-        def _fetch(url:, resolved_url:, timeout:)
-          m = RELEASE_ASSET.match(url)
-          raise "not a GitHub release asset" unless m
-          owner, repo, tag, file = m.captures
-          token = ENV.fetch("HOMEBREW_GITHUB_API_TOKEN", "")
-          if token.empty?
-            raise "heedle is private: export HOMEBREW_GITHUB_API_TOKEN=$(gh auth token), then install again"
+          # Homebrew probes the URL before downloading; a private release's
+          # URL answers 404 without a token, so take it as it is.
+          def resolve_url_basename_time_file_size(url, timeout: nil)
+            [url, File.basename(URI(url).path), nil, nil, nil, false]
           end
-          api = "https://api.github.com/repos/#{owner}/#{repo}/releases"
-          auth = ["--header", "Authorization: Bearer #{token}", "--header", "X-GitHub-Api-Version: 2022-11-28"]
-          release = curl_output(*auth, "--fail", "#{api}/tags/#{tag}")
-          unless release.success?
-            raise "can't read release #{tag} of #{owner}/#{repo}: does the token have access to it?"
+
+          def _fetch(url:, resolved_url:, timeout:)
+            m = %r{\Ahttps://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/]+)\z}.match(url)
+            raise "not a GitHub release asset: #{url}" unless m
+            owner, repo, tag, file = m.captures
+            token = ENV.fetch("HOMEBREW_GITHUB_API_TOKEN", "")
+            if token.empty?
+              token = begin
+                IO.popen(["gh", "auth", "token"], err: File::NULL, &:read).to_s.strip
+              rescue SystemCallError
+                ""
+              end
+            end
+            if token.empty?
+              raise "heedle is private: sign in with gh auth login, or export HOMEBREW_GITHUB_API_TOKEN, then install again"
+            end
+            # The token goes to curl in a file only this user can read, not
+            # in its arguments, which other users could see.
+            Tempfile.create("heedle-auth") do |f|
+              f.chmod(0600)
+              f.write("Authorization: Bearer #{token}\nX-GitHub-Api-Version: 2022-11-28\n")
+              f.flush
+              api = "https://api.github.com/repos/#{owner}/#{repo}/releases"
+              release = curl_output("--header", "@#{f.path}", "--fail", "--location", "--max-time", "60", "#{api}/tags/#{tag}")
+              unless release.success?
+                raise "can't read release #{tag} of #{owner}/#{repo}: does your GitHub token have access to it?"
+              end
+              asset = JSON.parse(release.stdout).fetch("assets", []).find { |a| a["name"] == file }
+              raise "release #{tag} of #{owner}/#{repo} has no #{file}" unless asset
+              curl_download("#{api}/assets/#{asset["id"]}", "--header", "@#{f.path}",
+                            "--header", "Accept: application/octet-stream", to: temporary_path, timeout: timeout)
+            end
           end
-          asset = JSON.parse(release.stdout).fetch("assets", []).find { |a| a["name"] == file }
-          raise "release #{tag} has no #{file}" unless asset
-          curl_download("#{api}/assets/#{asset["id"]}", *auth, "--header", "Accept: application/octet-stream",
-                        to: temporary_path, timeout: timeout)
         end
       end
-    dependencies:
-      - formula: git
-      - formula: podman
-      - formula: temporal
-    hooks:
-      post:
-        # The binary isn't notarized; let macOS run it.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/heedle"]
-          end
+
+      # The binary isn't notarized; let macOS run it.
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "heedle"], chdir: ".", must_succeed: false
+        end
+      end
+
+release:
+  prerelease: auto
 
 changelog:
   disable: true
