@@ -127,3 +127,20 @@ jobs:
           # cask's token-reading strategy, and the cask is valid Ruby.
           test "$(grep -c 'using: HeedlePrivateReleaseDownloadStrategy' dist/homebrew/Casks/heedle.rb)" = 3
           ruby -c dist/homebrew/Casks/heedle.rb
+      - name: cask
+        # Homebrew itself loads the cask, in developer mode, where anything
+        # deprecated is an error (review 22): a snapshot cask in a local,
+        # trusted tap. Nothing is downloaded or published.
+        if: matrix.os == 'macos-latest'
+        working-directory: heedle
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfLo goreleaser.tgz https://github.com/goreleaser/goreleaser/releases/download/v2.12.7/goreleaser_Darwin_arm64.tar.gz
+          echo "50fff56875b9b981aae6fec1265b081dcb4c8a3a3402656b62d8699b00befb31  goreleaser.tgz" | shasum -a 256 -c
+          tar -xzf goreleaser.tgz goreleaser
+          cd "$GITHUB_WORKSPACE/heedle"
+          "$RUNNER_TEMP/goreleaser" release --snapshot --clean
+          brew tap-new --no-git heedle-ai/check
+          cp dist/homebrew/Casks/heedle.rb "$(brew --repository heedle-ai/check)/Casks/heedle.rb"
+          brew trust --tap heedle-ai/check
+          HOMEBREW_DEVELOPER=1 brew info --cask heedle-ai/check/heedle
