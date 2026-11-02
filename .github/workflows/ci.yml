@@ -141,6 +141,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/heedle"
           "$RUNNER_TEMP/goreleaser" release --snapshot --clean
           brew tap-new --no-git heedle-ai/check
+          mkdir -p "$(brew --repository heedle-ai/check)/Casks"
           cp dist/homebrew/Casks/heedle.rb "$(brew --repository heedle-ai/check)/Casks/heedle.rb"
           brew trust --tap heedle-ai/check
           HOMEBREW_DEVELOPER=1 brew info --cask heedle-ai/check/heedle
