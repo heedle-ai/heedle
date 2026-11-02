@@ -108,7 +108,8 @@ jobs:
           grep -q -- '--- PASS: TestE2E_Up' e2e.log
       - name: release
         # The GoReleaser configuration is valid and builds exactly the
-        # supported platforms; nothing is published.
+        # supported platforms; nothing is published (release.yml does
+        # that, on a v* tag).
         if: matrix.os == 'ubuntu-latest'
         working-directory: heedle
         run: |
@@ -122,3 +123,7 @@ jobs:
           got=$(cd dist && ls *.tar.gz | sed -E 's/^heedle_[^_]+_//' | sort | tr '\n' ' ')
           test "$got" = "darwin_arm64.tar.gz linux_amd64.tar.gz linux_arm64.tar.gz " || { echo "built: $got"; exit 1; }
           grep -q 'depends_on formula' dist/homebrew/Casks/heedle.rb
+          # The releases are private: every download goes through the
+          # cask's token-reading strategy, and the cask is valid Ruby.
+          test "$(grep -c 'using: HeedlePrivateReleaseDownloadStrategy' dist/homebrew/Casks/heedle.rb)" = 3
+          ruby -c dist/homebrew/Casks/heedle.rb
