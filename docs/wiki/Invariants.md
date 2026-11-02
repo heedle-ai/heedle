@@ -1,0 +1,11 @@
+Every invariant below is guarded by a test or a CI step, and CI checks this page against the code on every push with `bash .github/invariants.sh`. Only the **Guarded by** column counts. Each test named there must exist in exactly one package and is run, and must not be skipped; each `ci:NAME` must be a step in `.github/workflows/ci.yml`. Every `TestLaw_`, `TestInv_` and `Fuzz` test must be listed.
+
+| ID | Invariant | Guarded by | Came from |
+|---|---|---|---|
+| HEEDLE-1 | heedle reimplements nothing: every loom command is `loom/cli.Run` and `heedle ui` is `drawdown/app.Run`, unchanged | `TestInv_HeedleIsLoomAndDrawdown` | One binary (roadmap 5.1) |
+| HEEDLE-2 | `heedle up` refuses without Git before starting anything; it starts Temporal's dev server (the `temporal` on the PATH, else the SDK's download into the home directory) with its database in the home directory and its Web UI on, then the UI and worker with the home's store and any flags after `--`; it stops Temporal once the UI stops, even when the UI fails | `TestInv_UpStartsTemporalThenTheUI` | heedle up (roadmap 5.2) |
+| HEEDLE-3 | On macOS, `heedle up` creates Podman's virtual machine if there is none, starts it if none is running, and leaves a running one alone; on Linux it never touches Podman machines | `TestInv_UpPreparesPodmanOnMacOnly` | heedle up (roadmap 5.2) |
+| HEEDLE-4 | `heedle up` works for real: against a real Temporal dev server, a program submitted in the UI runs and is recorded, `heedle run` and `heedle beliefs` work against the same Temporal and store, and stopping heedle stops everything | `ci:e2e` | heedle up (roadmap 5.2) |
+| HEEDLE-5 | Release builds are for Linux (amd64, arm64) and macOS on Apple Silicon only, and the GoReleaser configuration is valid and builds | `ci:release` | Releases (roadmap 5.3) |
+| HEEDLE-6 | A CI check that must fail can: every workflow runs steps with `shell: bash` (`-eo pipefail`), and no command is negated (`! grep ...`, which errexit ignores) | `TestInv_CIChecksCanFail` | Phase 3 e2e work and review 20, in the other repos |
+| HEEDLE-7 | The private repos bobbin, reed, pirn and treadle are checked out with their own read-only deploy keys; a missing key fails CI rather than skipping | `ci:private-bobbin`, `ci:private-reed`, `ci:private-pirn`, `ci:private-treadle` | As in loom and drawdown |

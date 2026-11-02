@@ -1,0 +1,52 @@
+# GoReleaser (v2) builds heedle for the platforms heedle supports and
+# writes its Homebrew cask. CI runs `goreleaser check` and a snapshot
+# build on every push; nothing is published until bobbin, reed, pirn
+# and treadle are public (then: tag, and goreleaser release).
+version: 2
+project_name: heedle
+
+builds:
+  - main: .
+    binary: heedle
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: darwin # macOS on Apple Silicon only
+        goarch: amd64
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md]
+
+checksum:
+  name_template: checksums.txt
+
+homebrew_casks:
+  - name: heedle
+    homepage: https://github.com/heedle-ai/heedle
+    description: Programs of AI steps that run on Temporal and are recorded in Git.
+    binaries: [heedle]
+    repository:
+      owner: heedle-ai
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # Until the private repos are public, nothing is uploaded.
+    skip_upload: true
+    dependencies:
+      - formula: git
+      - formula: podman
+      - formula: temporal
+    hooks:
+      post:
+        # The binary isn't notarized; let macOS run it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/heedle"]
+          end
+
+changelog:
+  disable: true
