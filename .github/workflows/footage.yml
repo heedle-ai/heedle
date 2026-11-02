@@ -1,0 +1,124 @@
+name: Footage
+
+# Records footage for the product video on a real heedle up: real
+# Temporal, real runs, drawdown and Temporal's Web UI. Lives only on the
+# footage branch; uploads the videos as an artifact.
+
+on:
+  push:
+    branches: [footage]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: heedle
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/loom
+          path: loom
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/drawdown
+          path: drawdown
+      - uses: actions/checkout@v4      # go.mod replaces the heedle-ai modules with ../
+        with:
+          repository: heedle-ai/weft
+          path: weft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/shuttle
+          path: shuttle
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/draft
+          path: draft
+      - uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/warp
+          path: warp
+      - name: private-bobbin
+        # read-only deploy key on heedle-ai/bobbin
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/bobbin
+          path: bobbin
+          ssh-key: ${{ secrets.BOBBIN_DEPLOY_KEY }}
+      - name: private-reed
+        # read-only deploy key on heedle-ai/reed
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/reed
+          path: reed
+          ssh-key: ${{ secrets.REED_DEPLOY_KEY }}
+      - name: private-pirn
+        # read-only deploy key on heedle-ai/pirn
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/pirn
+          path: pirn
+          ssh-key: ${{ secrets.PIRN_DEPLOY_KEY }}
+      - name: private-treadle
+        # read-only deploy key on heedle-ai/treadle
+        uses: actions/checkout@v4
+        with:
+          repository: heedle-ai/treadle
+          path: treadle
+          ssh-key: ${{ secrets.TREADLE_DEPLOY_KEY }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: heedle/go.mod
+          cache-dependency-path: heedle/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: tools
+        working-directory: heedle
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          go build -o heedle .
+      - name: up
+        working-directory: heedle
+        run: |
+          ./heedle up -home "$RUNNER_TEMP/h" > up.log 2>&1 &
+          for i in $(seq 1 120); do grep -q "drawdown on" up.log && break; sleep 1; done
+          cat up.log
+          grep -q "drawdown on" up.log
+      - name: runs
+        working-directory: heedle
+        run: |
+          shipment='(pipe (par (source "weather") (source "carrier") (source "factory")) (assess "the shipment will be late"))'
+          for p in "$shipment" \
+                   '(pipe (par (echo "port report") (echo "carrier notice")) echo)' \
+                   '(pipe (par (source "weather") (source "carrier")) (assess "the shipment will be late"))' \
+                   '(pipe (echo "weekly digest") (par echo (echo "ops")) echo)' \
+                   "$shipment" \
+                   '(pipe (par (echo "a") (echo "b") (echo "c")) (par echo (echo "d")) echo)' \
+                   '(pipe (par (source "weather") (source "carrier") (source "factory")) (assess "the factory is the bottleneck"))' \
+                   "$shipment"; do
+            ./heedle run "$p" | tee -a runs.log
+          done
+      - name: record
+        working-directory: heedle
+        env:
+          OUT: ${{ runner.temp }}/footage
+        run: |
+          node footage/record.js
+          cp up.log runs.log "$OUT/"
+          ls -R "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: footage
+          path: ${{ runner.temp }}/footage
