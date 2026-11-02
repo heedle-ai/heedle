@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +27,7 @@ import (
 var version = "dev"
 
 const usage = `usage:
-  heedle up [-home DIR] [-listen ADDR] [-- UI FLAGS]
+  heedle up [-home DIR] [-listen ADDR] [-temporal-port N] [-temporal-ui-port N] [-- UI FLAGS]
                        start Temporal, a worker and the UI (open the URL it prints)
   heedle ui -store DIR [FLAGS]
                        the UI and a worker alone, against a Temporal you run
@@ -36,8 +37,13 @@ const usage = `usage:
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
+	// A second Ctrl-C while shutting down ends the process at once.
+	go func() { <-ctx.Done(); stop() }()
+	err := run(ctx, os.Args[1:], os.Stdout)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "heedle:", err)
 		os.Exit(1)
 	}

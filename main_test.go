@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -14,10 +15,9 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
-
-	"go.temporal.io/sdk/testsuite"
 )
 
 var ctx = context.Background()
@@ -40,6 +40,10 @@ func TestInv_HeedleIsLoomAndDrawdown(t *testing.T) {
 	if err := run(ctx, []string{"ui"}, io.Discard); err == nil || !strings.Contains(err.Error(), "-store") {
 		t.Errorf("heedle ui is drawdown's: %v", err)
 	}
+	var help bytes.Buffer
+	if err := run(ctx, []string{"up", "-h"}, &help); !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "-temporal-port") {
+		t.Errorf("heedle up -h: %v\n%s", err, help.String())
+	}
 	if err := run(ctx, nil, io.Discard); err == nil || !strings.Contains(err.Error(), "heedle up") {
 		t.Errorf("no command: %v", err)
 	}
@@ -52,7 +56,8 @@ type machine struct {
 	machines  string // podman machine list's output
 	mu        sync.Mutex
 	calls     []string
-	opts      *testsuite.DevServerOptions
+	started   []string // temporal's path and arguments
+	hostPort  string
 	stopped   int
 	served    []string
 	failServe error
@@ -76,12 +81,12 @@ func (m *machine) system() system {
 			}
 			return nil, nil
 		},
-		temporal: func(_ context.Context, o testsuite.DevServerOptions) (string, func() error, error) {
-			m.opts = &o
-			return o.ClientOptions.HostPort, func() error { m.stopped++; return nil }, nil
+		temporal: func(_ context.Context, path string, args []string, _ io.Writer, hostPort string) (func() error, error) {
+			m.started, m.hostPort = append([]string{path}, args...), hostPort
+			return func() error { m.stopped++; return nil }, nil
 		},
 		serve: func(_ context.Context, args []string, _ io.Writer) error {
-			if m.opts == nil || m.stopped > 0 {
+			if m.started == nil || m.stopped > 0 {
 				return errors.New("the UI started without Temporal running")
 			}
 			m.served = args
@@ -90,25 +95,30 @@ func (m *machine) system() system {
 	}
 }
 
-// TestInv_UpStartsTemporalThenTheUI: heedle up starts Temporal's dev
-// server (the temporal on the PATH, or the SDK's download, into the home
-// directory), keeping its database in the home directory with its Web
-// UI on, then serves the UI and a worker against it with the home's
+// TestInv_UpStartsTemporalThenTheUI: heedle up starts the temporal on
+// the PATH (server start-dev, on 127.0.0.1, with its database in the home
+// directory), then serves the UI and a worker against it with the home's
 // store and any flags after --, and stops Temporal once the UI stops,
-// even when it fails. Without Git it refuses before starting anything.
+// even when it fails. It refuses before starting anything without Git or
+// the Temporal CLI, when Temporal's ports are taken (another Temporal
+// would answer for ours), or when a flag after -- would override the
+// store, address or listen address it sets. (Review 21.)
 func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	home := t.TempDir()
+	port, uiPort := freePort(t), freePort(t)
+	ports := []string{"-temporal-port", fmt.Sprint(port), "-temporal-ui-port", fmt.Sprint(uiPort)}
 	m := &machine{goos: "linux", has: map[string]bool{"git": true, "podman": true, "temporal": true}}
 	var out bytes.Buffer
-	err := up(ctx, []string{"-home", home, "-listen", "127.0.0.1:9000", "--", "-agent-image", "abc"}, &out, m.system())
+	err := up(ctx, append(append([]string{"-home", home, "-listen", "127.0.0.1:9000"}, ports...), "--", "-agent-image", "abc"), &out, m.system())
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := m.opts
-	if o.ExistingPath != "/usr/local/bin/temporal" || o.DBFilename != filepath.Join(home, "temporal.db") || !o.EnableUI || o.UIPort != "8233" || o.ClientOptions.HostPort != "127.0.0.1:7233" {
-		t.Errorf("Temporal started with %+v", o)
+	address := fmt.Sprintf("127.0.0.1:%d", port)
+	wantStart := fmt.Sprintf("/usr/local/bin/temporal server start-dev --ip 127.0.0.1 --port %d --ui-port %d --namespace default --db-filename %s --log-level warn", port, uiPort, filepath.Join(home, "temporal.db"))
+	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
+		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", "127.0.0.1:7233", "-temporal-ui", "http://127.0.0.1:8233", "-listen", "127.0.0.1:9000", "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
@@ -116,48 +126,119 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 		t.Errorf("on Linux, heedle up ran %q", m.calls)
 	}
 
-	m = &machine{goos: "linux", has: map[string]bool{"git": true}, failServe: errors.New("address in use")}
+	m = &machine{goos: "linux", has: map[string]bool{"git": true, "temporal": true}, failServe: errors.New("address in use")}
 	out.Reset()
-	if err := up(ctx, []string{"-home", home}, &out, m.system()); err == nil || m.stopped != 1 {
-		t.Errorf("a UI that fails: %v, Temporal stopped %d times", err, m.stopped)
-	}
-	if m.opts.ExistingPath != "" || m.opts.CachedDownload.DestDir != filepath.Join(home, "bin") || !strings.Contains(out.String(), "podman isn't on the PATH") {
-		t.Errorf("without temporal and podman: %+v\n%s", m.opts, out.String())
+	if err := up(ctx, append([]string{"-home", home}, ports...), &out, m.system()); err == nil || m.stopped != 1 || !strings.Contains(out.String(), "podman isn't on the PATH") {
+		t.Errorf("a UI that fails: %v, Temporal stopped %d times\n%s", err, m.stopped, out.String())
 	}
 
-	m = &machine{goos: "linux", has: map[string]bool{"temporal": true}}
-	if err := up(ctx, []string{"-home", home}, io.Discard, m.system()); err == nil || !strings.Contains(err.Error(), "Git") || m.opts != nil {
-		t.Errorf("without git: %v, Temporal started: %v", err, m.opts != nil)
+	busy, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", uiPort))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := up(ctx, []string{"-home", home, "stray"}, io.Discard, (&machine{has: map[string]bool{"git": true}}).system()); err == nil {
-		t.Error("a stray argument was accepted")
+	defer busy.Close()
+	for _, c := range []struct {
+		has  map[string]bool
+		args []string
+		want string
+	}{
+		{map[string]bool{"temporal": true}, nil, "Git"},
+		{map[string]bool{"git": true}, nil, "Temporal CLI"},
+		{map[string]bool{"git": true, "temporal": true}, nil, "in use"},
+		{map[string]bool{"git": true, "temporal": true}, []string{"stray"}, "unexpected"},
+		{map[string]bool{"git": true, "temporal": true}, []string{"--", "-store", "/elsewhere"}, "sets -store"},
+		{map[string]bool{"git": true, "temporal": true}, []string{"--", "--address=x:1"}, "sets -address"},
+	} {
+		m := &machine{goos: "linux", has: c.has}
+		err := up(ctx, append(append([]string{"-home", home}, ports...), c.args...), io.Discard, m.system())
+		if err == nil || !strings.Contains(err.Error(), c.want) || m.started != nil {
+			t.Errorf("%v %q: %v, Temporal started: %v", c.has, c.args, err, m.started != nil)
+		}
 	}
 }
 
-// TestInv_UpPreparesPodmanOnMacOnly: on macOS, heedle up creates
-// Podman's virtual machine if there is none and starts it if it isn't
-// running, and leaves a running one alone; elsewhere it never touches
-// Podman machines.
+// TestInv_UpPreparesPodmanOnMacOnly: on macOS, heedle up creates and
+// starts Podman's virtual machine if there is none, starts the default
+// one (or the only one) if none is running, and leaves one that is
+// running or starting alone; elsewhere it never touches Podman machines.
+// (Review 21: a starting machine, and a machine not named
+// podman-machine-default.)
 func TestInv_UpPreparesPodmanOnMacOnly(t *testing.T) {
 	for _, c := range []struct {
 		goos, machines, want string
 	}{
 		{"darwin", `[]`, "podman machine list --format json|podman machine init|podman machine start"},
-		{"darwin", `[{"Name":"podman-machine-default*","Running":false}]`, "podman machine list --format json|podman machine start"},
-		{"darwin", `[{"Name":"other","Running":false},{"Name":"podman-machine-default*","Running":true}]`, "podman machine list --format json"},
+		{"darwin", `[{"Name":"podman-machine-default","Default":true,"Running":false}]`, "podman machine list --format json|podman machine start podman-machine-default"},
+		{"darwin", `[{"Name":"mine","Running":false}]`, "podman machine list --format json|podman machine start mine"},
+		{"darwin", `[{"Name":"a"},{"Name":"b","Default":true}]`, "podman machine list --format json|podman machine start b"},
+		{"darwin", `[{"Name":"other"},{"Name":"podman-machine-default","Default":true,"Running":true}]`, "podman machine list --format json"},
+		{"darwin", `[{"Name":"podman-machine-default","Default":true,"Starting":true}]`, "podman machine list --format json"},
 		{"linux", `[]`, ""},
 	} {
-		m := &machine{goos: c.goos, machines: c.machines, has: map[string]bool{"git": true, "podman": true}}
-		if err := up(ctx, []string{"-home", t.TempDir()}, io.Discard, m.system()); err != nil {
+		m := &machine{goos: c.goos, machines: c.machines, has: map[string]bool{"git": true, "podman": true, "temporal": true}}
+		if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, m.system()); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Join(m.calls, "|"); got != c.want {
 			t.Errorf("%s with %s: ran %q, want %q", c.goos, c.machines, got, c.want)
 		}
 	}
-	bad := &machine{goos: "darwin", machines: "not json", has: map[string]bool{"git": true, "podman": true}}
-	if err := up(ctx, []string{"-home", t.TempDir()}, io.Discard, bad.system()); err == nil || bad.opts != nil {
+	bad := &machine{goos: "darwin", machines: "not json", has: map[string]bool{"git": true, "podman": true, "temporal": true}}
+	if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, bad.system()); err == nil || bad.started != nil {
 		t.Errorf("an unreadable machine list: %v", err)
+	}
+}
+
+// fakeTemporal is a temporal CLI that runs script and writes its PID to
+// the file it returns.
+func fakeTemporal(t *testing.T, script string) (string, string) {
+	dir := t.TempDir()
+	pid := filepath.Join(dir, "pid")
+	p := filepath.Join(dir, "temporal")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho $$ > "+pid+"\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p, pid
+}
+
+// alive reports whether the process whose PID is in file still runs.
+func alive(t *testing.T, file string) bool {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	fmt.Sscan(string(b), &pid)
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Signal(syscall.Signal(0)) == nil
+}
+
+// TestInv_TemporalNeverOutlivesUp: a Temporal that exits while starting
+// is reported at once, with what it logged; one that doesn't answer in
+// time, or is still starting when heedle is stopped, is stopped, so
+// nothing is left running. (Review 21: the SDK's launcher waited a minute
+// for a dead server, and left a starting one running.)
+func TestInv_TemporalNeverOutlivesUp(t *testing.T) {
+	address := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	dead, _ := fakeTemporal(t, "echo cannot open database >&2; exit 1")
+	var log bytes.Buffer
+	start := time.Now()
+	if _, err := startTemporal(ctx, dead, nil, &log, address); err == nil || !strings.Contains(err.Error(), "exited") || time.Since(start) > 10*time.Second || !strings.Contains(log.String(), "cannot open database") {
+		t.Errorf("a Temporal that exits: %v after %v, logged %q", err, time.Since(start), log.String())
+	}
+
+	slow, pid := fakeTemporal(t, "exec sleep 1000")
+	c, cancel := context.WithCancel(ctx)
+	time.AfterFunc(time.Second, cancel)
+	if _, err := startTemporal(c, slow, nil, io.Discard, address); !errors.Is(err, context.Canceled) || alive(t, pid) {
+		t.Errorf("stopped while starting: %v, still running: %v", err, alive(t, pid))
+	}
+
+	defer func(d time.Duration) { TemporalReady = d }(TemporalReady)
+	TemporalReady = time.Second
+	slow, pid = fakeTemporal(t, "exec sleep 1000")
+	if _, err := startTemporal(ctx, slow, nil, io.Discard, address); err == nil || !strings.Contains(err.Error(), "didn't answer") || alive(t, pid) {
+		t.Errorf("a Temporal that never answers: %v, still running: %v", err, alive(t, pid))
 	}
 }
 
@@ -183,10 +264,10 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// TestE2E_Up runs heedle up for real (Temporal's dev server, which the
-// SDK downloads when temporal isn't on the PATH), submits a program
+// TestE2E_Up runs heedle up for real (the temporal CLI on the PATH),
+// submits a program
 // through the UI's API, and waits for the worker to run and record it;
-// then stops everything. CI's e2e step runs it with HEEDLE_E2E=1.
+// then stops everything, Temporal included. CI's e2e step runs it with HEEDLE_E2E=1.
 func TestE2E_Up(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E") != "1" {
 		t.Skip("set HEEDLE_E2E=1 to run heedle up against a real Temporal server")
@@ -198,9 +279,10 @@ func TestE2E_Up(t *testing.T) {
 	home := t.TempDir()
 	var out syncBuffer
 	done := make(chan error, 1)
+	uiPort := fmt.Sprint(freePort(t))
 	go func() {
 		done <- up(c, []string{"-home", home, "-listen", listen,
-			"-temporal-port", strings.TrimPrefix(address, "127.0.0.1:"), "-temporal-ui-port", fmt.Sprint(freePort(t))}, &out, system{})
+			"-temporal-port", strings.TrimPrefix(address, "127.0.0.1:"), "-temporal-ui-port", uiPort}, &out, system{})
 	}()
 	base := "http://" + listen
 	for !strings.Contains(out.String(), "drawdown on") {
@@ -273,5 +355,9 @@ func TestE2E_Up(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("heedle up kept running after it was stopped")
+	}
+	if conn, err := net.Dial("tcp", address); err == nil {
+		conn.Close()
+		t.Error("Temporal still answers after heedle up stopped")
 	}
 }

@@ -7,7 +7,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 - Go 1.24 or later, to build it.
 - Git 2.42 or later.
 - [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you.
-- The [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal` on macOS). Without it on the PATH, `heedle up` uses the copy Temporal's Go SDK downloads.
+- The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
 - For `ask` and `agent` steps, an Anthropic API key in `ANTHROPIC_API_KEY`, where heedle runs.
 
 ## Build it
@@ -32,7 +32,7 @@ go build -o heedle .
 ./heedle up
 ```
 
-It prints where everything is: Temporal's address and Web UI, Temporal's log, and the UI's address. Open `http://127.0.0.1:8090` and run a program from **New run**, for example:
+It prints where everything is: Temporal's address and Web UI, Temporal's log, and the UI's address. If another Temporal is already running on its ports (say, a `temporal server start-dev` from loom's Getting Started), it refuses: stop that one, or give `-temporal-port` and `-temporal-ui-port`. Open `http://127.0.0.1:8090` and run a program from **New run**, for example:
 
 ```
 (pipe (par (echo "a") (echo "b")) echo)
@@ -40,11 +40,13 @@ It prints where everything is: Temporal's address and Web UI, Temporal's log, an
 
 Press Ctrl-C to stop the UI, the worker and Temporal. Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere.
 
-To give the UI drawdown's own flags, put them after `--`:
+To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, put them after `--`. For example, to record runs on another history:
 
 ```sh
-ANTHROPIC_API_KEY=sk-ant-... ./heedle up -- -agent-image IMAGE-ID -connectors connectors.json
+./heedle up -- -ref refs/loom/research
 ```
+
+`ask` and `agent` steps use `ANTHROPIC_API_KEY` from the environment `heedle up` runs in. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
 
 ## Run programs from the terminal
 
