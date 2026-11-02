@@ -97,19 +97,26 @@ jobs:
           cat up.log
           grep -q "drawdown on" up.log
       - name: runs
+        # Programs using the hello world's source and assess go through the
+        # UI's API (its worker has them); the rest through heedle run.
         working-directory: heedle
         run: |
+          submit() {
+            body=$(jq -n --arg p "$1" '{program: $p}')
+            id=$(curl -sSf -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:8090' -d "$body" http://127.0.0.1:8090/api/runs | jq -r .workflowId)
+            echo "submitted $id" | tee -a runs.log
+            sleep 4
+          }
           shipment='(pipe (par (source "weather") (source "carrier") (source "factory")) (assess "the shipment will be late"))'
-          for p in "$shipment" \
-                   '(pipe (par (echo "port report") (echo "carrier notice")) echo)' \
-                   '(pipe (par (source "weather") (source "carrier")) (assess "the shipment will be late"))' \
-                   '(pipe (echo "weekly digest") (par echo (echo "ops")) echo)' \
-                   "$shipment" \
-                   '(pipe (par (echo "a") (echo "b") (echo "c")) (par echo (echo "d")) echo)' \
-                   '(pipe (par (source "weather") (source "carrier") (source "factory")) (assess "the factory is the bottleneck"))' \
-                   "$shipment"; do
-            ./heedle run "$p" | tee -a runs.log
-          done
+          submit "$shipment"
+          ./heedle run '(pipe (par (echo "port report") (echo "carrier notice")) echo)' | tee -a runs.log
+          submit '(pipe (par (source "weather") (source "carrier")) (assess "the shipment will be late"))'
+          ./heedle run '(pipe (echo "weekly digest") (par echo (echo "ops")) echo)' | tee -a runs.log
+          submit "$shipment"
+          ./heedle run '(pipe (par (echo "a") (echo "b") (echo "c")) (par echo (echo "d")) echo)' | tee -a runs.log
+          submit '(pipe (par (source "weather") (source "carrier") (source "factory")) (assess "the factory is the bottleneck"))'
+          submit "$shipment"
+          sleep 5
       - name: record
         working-directory: heedle
         env:
