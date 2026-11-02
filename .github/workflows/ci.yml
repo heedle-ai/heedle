@@ -122,10 +122,10 @@ jobs:
           "$RUNNER_TEMP/goreleaser" release --snapshot --clean
           got=$(cd dist && ls *.tar.gz | sed -E 's/^heedle_[^_]+_//' | sort | tr '\n' ' ')
           test "$got" = "darwin_arm64.tar.gz linux_amd64.tar.gz linux_arm64.tar.gz " || { echo "built: $got"; exit 1; }
-          grep -q 'depends_on formula' dist/homebrew/Casks/heedle.rb
+          grep -q 'depends_on formula' dist/homebrew/Casks/heedle.rb || { echo 'the cask has no dependencies'; exit 1; }
           # The releases are private: every download goes through the
           # cask's token-reading strategy, and the cask is valid Ruby.
-          test "$(grep -c 'using: HeedlePrivateReleaseDownloadStrategy' dist/homebrew/Casks/heedle.rb)" = 3
+          test "$(grep -c 'using: HeedlePrivateReleaseDownloadStrategy' dist/homebrew/Casks/heedle.rb)" = 3 || { echo 'an archive is downloaded without the private strategy'; exit 1; }
           ruby -c dist/homebrew/Casks/heedle.rb
       - name: cask
         # Homebrew itself loads the cask, in developer mode, where anything

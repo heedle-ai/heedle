@@ -42,6 +42,12 @@ homebrew_casks:
     url:
       template: "https://github.com/heedle-ai/heedle/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
       using: HeedlePrivateReleaseDownloadStrategy
+    dependencies:
+      - formula: git
+      - formula: podman
+      - formula: temporal
+    # A pre-release (v0.2.0-rc1) is released, but not pushed to the tap.
+    skip_upload: auto
     # The releases are private, so the cask downloads through GitHub's
     # REST API with the token in HOMEBREW_GITHUB_API_TOKEN, read when it
     # downloads. CurlDownloadStrategy, curl_output and curl_download are
