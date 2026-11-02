@@ -9,7 +9,7 @@ on:
     branches: [footage]
 
 permissions:
-  contents: read
+  contents: write # pushes the footage to the footage-out branch
 
 defaults:
   run:
@@ -125,7 +125,14 @@ jobs:
           node footage/record.js
           cp up.log runs.log "$OUT/"
           ls -R "$OUT"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: footage
-          path: ${{ runner.temp }}/footage
+      - name: publish
+        # The footage goes to a throwaway branch, footage-out, so it can be
+        # fetched with git.
+        working-directory: ${{ runner.temp }}/footage
+        run: |
+          git init -q -b footage-out .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Footage from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" footage-out
