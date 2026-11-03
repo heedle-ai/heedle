@@ -4,7 +4,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 
 ## What you need
 
-- Go 1.24 or later, to build it.
+- Go 1.25 or later, to build it.
 - Git 2.42 or later.
 - [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you.
 - The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
@@ -62,7 +62,7 @@ To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, pu
 ./heedle secret set ANTHROPIC_API_KEY
 ```
 
-It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Or paste it on the UI's **connectors** page, which keeps it in the same keychain. Workers read keys for every step, so a key stored while heedle runs is used from the next step, with no restart. `heedle up` keeps the worker's connectors file at `~/.heedle/connectors.json` (until it exists, there are no connectors), and the worker reads it before every step too. The connectors page adds servers to it from the MCP Registry, with their tokens going to your keychain. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. Other programs running as you can read keychain items too; what the keychain keeps keys out of is records, logs and the agents' containers. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
+It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Or paste it on the UI's **connectors** page, which keeps it in the same keychain. Workers read keys for every step, so a key stored while heedle runs is used from the next step, with no restart. `heedle up` keeps the worker's connectors file at `~/.heedle/connectors.json` (until it exists, there are no connectors), and the worker reads it before every step too. The connectors page adds servers to it from the MCP Registry, signing you in where a server offers it (open heedle at `http://127.0.0.1:8090` for that), with their tokens going to your keychain and refreshed for you. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. Other programs running as you can read keychain items too; what the keychain keeps keys out of is records, logs and the agents' containers. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
 
 ## Run programs from the terminal
 
