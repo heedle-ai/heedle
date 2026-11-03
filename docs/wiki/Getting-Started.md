@@ -76,6 +76,17 @@ With `heedle up` running, every loom command works against it:
 
 `./heedle COMMAND -h` lists a command's flags; [loom → Getting Started](https://github.com/heedle-ai/loom/wiki/Getting-Started) explains them.
 
+## Run a program on a schedule
+
+Write a program on the home page, then **Schedule…** beside **Run**: give it a name, and run it every hour, day or week, or at cron times in your time zone. The **schedules** page runs one now, pauses, resumes or deletes it. From the terminal:
+
+```sh
+./heedle schedule -name weekday-digest -cron "0 9 * * 1-5" -tz Europe/Lisbon '(pipe (echo "weekly digest") echo)'
+./heedle schedules
+```
+
+Temporal keeps the schedules, so they run while `heedle up` runs, and a run missed by under 10 minutes (your Mac asleep) still starts when it's back.
+
 ## Uninstall
 
 heedle keeps its keys in your keychain, every one under the service `heedle`, and everything else in `~/.heedle`. Delete the keys first, while heedle is still installed, then heedle and its home:
