@@ -76,6 +76,20 @@ With `heedle up` running, every loom command works against it:
 
 `./heedle COMMAND -h` lists a command's flags; [loom → Getting Started](https://github.com/heedle-ai/loom/wiki/Getting-Started) explains them.
 
+## Plan a trip
+
+The trip planner is a skill and two connectors, with no code: treadle's [`trip-planner`](https://github.com/heedle-ai/treadle/tree/main/skills/trip-planner). It researches a destination with a search connector and builds a day-by-day itinerary with a maps connector: places, their opening hours that day, and travel times between them.
+
+1. **Connect search and maps.** On the **connectors** page, find a web search server and a maps server in the MCP Registry, and add each, signing in or pasting a key. Name them `search` and `maps`: the skill asks for those names.
+2. **Add the skill.** On the **skills** page, import `https://github.com/heedle-ai/treadle/tree/main/skills/trip-planner`, or upload its folder. It asks for connectors, so it waits for your review: the review shows `search maps` in red. Approve it.
+3. **Run it**, with an agent image (`-- -agent-image <ID>` on `heedle up`):
+
+```lisp
+(trip-planner "Lisbon" "2026-12-12" "2026-12-16" "food, tiles, viewpoints")
+```
+
+The run's output is the itinerary: a section for each day, its stops with times and addresses, notes on closures and holidays, and the pages it used. It books, buys and saves nothing; if you ask it to save a list in maps, that write waits for your approval. **Schedule…** it weekly to see what's on.
+
 ## Run a program on a schedule
 
 Write a program on the home page, then **Schedule…** beside **Run**: give it a name, and run it every hour, day or week, or at cron times in your time zone. The **schedules** page runs one now, pauses, resumes or deletes it. From the terminal:
@@ -85,7 +99,7 @@ Write a program on the home page, then **Schedule…** beside **Run**: give it a
 ./heedle schedules
 ```
 
-Temporal keeps the schedules, so they run while `heedle up` runs, and a run missed by under 10 minutes (your Mac asleep) still starts when it's back.
+Temporal keeps the schedules, so they run while `heedle up` runs, and a run missed by under 10 minutes (your Mac asleep) still starts when it's back. "Every day" runs at the time of day you made it; use cron times for a set hour. A run that fails pauses its schedule, and the schedules page says why.
 
 ## Uninstall
 

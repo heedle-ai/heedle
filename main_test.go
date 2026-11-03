@@ -361,7 +361,9 @@ func TestE2E_Up(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			json.NewDecoder(res.Body).Decode(&v)
+			if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
 			res.Body.Close()
 		}
 		for _, s := range v.Schedules {
@@ -383,8 +385,20 @@ func TestE2E_Up(t *testing.T) {
 		}
 	}
 	var sched bytes.Buffer
-	if err := run(c, []string{"schedules", "-address", address, "-delete", "e2e-digest"}, &sched); err != nil || !strings.Contains(sched.String(), "no schedules") {
+	if err := run(c, []string{"schedules", "-address", address, "-delete", "e2e-digest"}, &sched); err != nil {
 		t.Errorf("heedle schedules -delete: %v\n%s", err, sched.String())
+	}
+	// Temporal's list of schedules catches up in a moment (review 30).
+	for !strings.Contains(sched.String(), "no schedules") {
+		select {
+		case <-c.Done():
+			t.Fatalf("the deleted schedule is still listed:\n%s", sched.String())
+		case <-time.After(time.Second):
+		}
+		sched.Reset()
+		if err := run(c, []string{"schedules", "-address", address}, &sched); err != nil {
+			t.Fatalf("heedle schedules: %v", err)
+		}
 	}
 	// The terminal commands, against the same Temporal and store.
 	var cli bytes.Buffer
