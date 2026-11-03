@@ -5,7 +5,8 @@
 //	heedle up                      start everything; open http://127.0.0.1:8090
 //	heedle ui -store DIR ...       the UI (and a worker) alone: drawdown's flags
 //	heedle run PROGRAM ...         any loom command: run, compile, worker, write,
-//	                               writes, skills, branch, merge, beliefs, secret
+//	                               writes, skills, branch, merge, beliefs, secret,
+//	                               schedule, schedules
 //	heedle version
 package main
 
@@ -32,7 +33,8 @@ const usage = `usage:
   heedle ui -store DIR [FLAGS]
                        the UI and a worker alone, against a Temporal you run
   heedle COMMAND ...   a loom command: run, compile, worker, write, writes,
-                       skills, branch, merge, beliefs, secret (heedle COMMAND -h for its flags)
+                       skills, branch, merge, beliefs, secret, schedule,
+                       schedules (heedle COMMAND -h for its flags)
   heedle version`
 
 func main() {

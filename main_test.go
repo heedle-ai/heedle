@@ -338,6 +338,54 @@ func TestE2E_Up(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	// A schedule, on a real Temporal: made from the UI, run now, its run
+	// recorded like any other, then deleted (roadmap 7.3).
+	post("/api/schedules", `{"name":"e2e-digest","program":"(pipe (echo \"scheduled\") echo)","every":"24h"}`)
+	post("/api/schedules/e2e-digest/run", `{}`)
+	for scheduled := ""; scheduled == ""; {
+		var v struct {
+			Schedules []struct {
+				Name   string `json:"name"`
+				Recent []struct {
+					WorkflowID string `json:"workflowId"`
+				} `json:"recent"`
+			} `json:"schedules"`
+			Runs []struct {
+				WorkflowID string `json:"workflowId"`
+				Status     string `json:"status"`
+				Commit     string `json:"commit"`
+			} `json:"runs"`
+		}
+		for _, path := range []string{"/api/schedules", "/api/runs"} {
+			res, err := http.Get(base + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			json.NewDecoder(res.Body).Decode(&v)
+			res.Body.Close()
+		}
+		for _, s := range v.Schedules {
+			for _, a := range s.Recent {
+				for _, r := range v.Runs {
+					if s.Name == "e2e-digest" && r.WorkflowID == a.WorkflowID && r.Status == "Completed" && commit.MatchString(r.Commit) {
+						scheduled = r.WorkflowID
+					}
+				}
+			}
+		}
+		if scheduled != "" {
+			break
+		}
+		select {
+		case <-c.Done():
+			t.Fatalf("the scheduled run never completed: %+v\n%s", v, out.String())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	var sched bytes.Buffer
+	if err := run(c, []string{"schedules", "-address", address, "-delete", "e2e-digest"}, &sched); err != nil || !strings.Contains(sched.String(), "no schedules") {
+		t.Errorf("heedle schedules -delete: %v\n%s", err, sched.String())
+	}
 	// The terminal commands, against the same Temporal and store.
 	var cli bytes.Buffer
 	if err := run(c, []string{"run", "-address", address, `(pipe (echo "from the terminal") echo)`}, &cli); err != nil || !strings.Contains(cli.String(), "from the terminal") {
