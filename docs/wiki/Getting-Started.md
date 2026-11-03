@@ -75,3 +75,15 @@ With `heedle up` running, every loom command works against it:
 ```
 
 `./heedle COMMAND -h` lists a command's flags; [loom → Getting Started](https://github.com/heedle-ai/loom/wiki/Getting-Started) explains them.
+
+## Uninstall
+
+heedle keeps its keys in your keychain, every one under the service `heedle`, and everything else in `~/.heedle`. Delete the keys first, while heedle is still installed, then heedle and its home:
+
+```sh
+./heedle secret delete --all
+brew uninstall --cask heedle
+rm -rf ~/.heedle
+```
+
+`secret delete --all` asks before it deletes at a terminal, and doesn't from a script. It removes only items filed under `heedle`: in the macOS Keychain, one at a time, counting them; in the Linux secret service, with `secret-tool clear service heedle`, then checks none is left (a locked keyring keeps them, and it says so). With heedle already gone, the same can be done by hand: on macOS, `while security delete-generic-password -s heedle >/dev/null 2>&1; do :; done`; on Linux, `secret-tool clear service heedle`.
