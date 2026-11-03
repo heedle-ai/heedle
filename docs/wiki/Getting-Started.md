@@ -8,7 +8,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 - Git 2.42 or later.
 - [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you.
 - The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
-- For `ask` and `agent` steps, an Anthropic API key in `ANTHROPIC_API_KEY`, where heedle runs.
+- For `ask` and `agent` steps, an Anthropic API key: stored once with `heedle secret set ANTHROPIC_API_KEY`, or in `ANTHROPIC_API_KEY` where heedle runs. On Linux the keychain needs `secret-tool` (`libsecret-tools` on Debian and Ubuntu) and a running secret service such as GNOME Keyring.
 
 ## Build it
 
@@ -56,7 +56,13 @@ To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, pu
 ./heedle up -- -ref refs/loom/research
 ```
 
-`ask` and `agent` steps use `ANTHROPIC_API_KEY` from the environment `heedle up` runs in. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
+`ask` and `agent` steps use `ANTHROPIC_API_KEY` from the environment `heedle up` runs in, or else from your keychain. Store it, or a connector's key, once:
+
+```sh
+./heedle secret set ANTHROPIC_API_KEY
+```
+
+It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
 
 ## Run programs from the terminal
 
