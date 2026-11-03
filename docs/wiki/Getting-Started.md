@@ -62,7 +62,7 @@ To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, pu
 ./heedle secret set ANTHROPIC_API_KEY
 ```
 
-It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Restart `heedle up` after storing the Anthropic key: workers read it when they start. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. Other programs running as you can read keychain items too; what the keychain keeps keys out of is records, logs and the agents' containers. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
+It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Or paste it on the UI's **connectors** page, which keeps it in the same keychain. Workers read keys for every step, so a key stored while heedle runs is used from the next step, with no restart. `heedle up` keeps the worker's connectors file at `~/.heedle/connectors.json` (until it exists, there are no connectors), and the worker reads it before every step too. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. Other programs running as you can read keychain items too; what the keychain keeps keys out of is records, logs and the agents' containers. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
 
 ## Run programs from the terminal
 
