@@ -88,7 +88,7 @@ The trip planner is a skill and two connectors, with no code: treadle's [`trip-p
 (trip-planner "Lisbon" "2026-12-12" "2026-12-16" "food, tiles, viewpoints")
 ```
 
-The run's output is the itinerary: a section for each day, its stops with times and addresses, notes on closures and holidays, and the pages it used. It books, buys and saves nothing; if you ask it to save a list in maps, that write waits for your approval. **Schedule…** it weekly to see what's on.
+The run's output is the itinerary: a section for each day, its stops with times and addresses, notes on closures and holidays, and the pages it used. It only looks things up: it books, buys and saves nothing. To make sure of that whatever Claude does, list your maps connector's saving tools under `writes`, with `approve`, in `~/.heedle/connectors.json`; then any call to one waits for you. **Schedule…** it weekly to see what's on.
 
 ## Run a program on a schedule
 
