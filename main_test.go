@@ -118,7 +118,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
 		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}

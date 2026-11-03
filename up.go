@@ -135,7 +135,10 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	}
 	defer stop()
 	fmt.Fprintf(out, "Temporal on %s (Web UI http://%s, log %s)\n", hostPort, temporalUI, logFile.Name())
-	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen}, uiArgs...), out)
+	// The connectors file lives in the home too (a -connectors after --
+	// wins); it needn't exist until there is a connector.
+	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
+		"-connectors", filepath.Join(*home, "connectors.json")}, uiArgs...), out)
 }
 
 // ownFlags are drawdown's flags heedle up sets; passing them after --
