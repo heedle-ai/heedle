@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +19,10 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/log"
 
 	"github.com/heedle-ai/drawdown/app"
+	"github.com/heedle-ai/loom"
 )
 
 // system is what heedle up uses from the machine: programs on the PATH,
@@ -36,6 +40,10 @@ type system struct {
 	temporal func(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (stop func() error, err error)
 	// serve serves the UI and a worker until ctx ends (drawdown's app.Run).
 	serve func(ctx context.Context, args []string, out io.Writer) error
+	// notify shows one of the operating system's notifications.
+	notify func(ctx context.Context, title, body string) error
+	// notifyEvery is how often heedle looks for something to tell.
+	notifyEvery time.Duration
 }
 
 func (s system) withDefaults(out io.Writer) system {
@@ -58,7 +66,67 @@ func (s system) withDefaults(out io.Writer) system {
 	if s.serve == nil {
 		s.serve = app.Run
 	}
+	if s.notify == nil {
+		s.notify = func(ctx context.Context, title, body string) error {
+			name, args, err := notifyCommand(s.goos, s.lookPath, title, body)
+			if err != nil {
+				return err
+			}
+			_, err = s.output(ctx, name, args...)
+			return err
+		}
+	}
+	if s.notifyEvery == 0 {
+		s.notifyEvery = 15 * time.Second
+	}
 	return s
+}
+
+// notifyCommand is the command that shows a notification: osascript on
+// macOS, notify-send on Linux. The title and body are its arguments,
+// never part of a script, so what they say can't change what runs.
+func notifyCommand(goos string, lookPath func(string) (string, error), title, body string) (string, []string, error) {
+	switch goos {
+	case "darwin":
+		return "osascript", []string{"-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, body}, nil
+	case "linux":
+		if _, err := lookPath("notify-send"); err != nil {
+			return "", nil, errors.New("notify-send isn't installed (Debian and Ubuntu: libnotify-bin)")
+		}
+		return "notify-send", []string{"--app-name=heedle", "--", title, body}, nil
+	}
+	return "", nil, fmt.Errorf("no notifications on %s", goos)
+}
+
+// watch tells you, with the system's notifications, when a scheduled run
+// ends and when a write waits for your approval (loom.Watcher), each
+// once, until ctx ends. A notification that can't be shown is said once.
+func watch(ctx context.Context, sys system, hostPort, queue, base string, out io.Writer) {
+	c, err := client.NewLazyClient(client.Options{HostPort: hostPort, Logger: log.NewStructuredLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))})
+	if err != nil {
+		fmt.Fprintf(out, "notifications: %v\n", err)
+		return
+	}
+	defer c.Close()
+	w := &loom.Watcher{Client: c, Queue: queue, Since: time.Now()}
+	said := false
+	t := time.NewTicker(sys.notifyEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		notices, _ := w.Check(ctx)
+		for _, n := range notices {
+			link := base + "/#/run/" + url.PathEscape(n.Workflow) + "/" + url.PathEscape(n.Run)
+			if err := sys.notify(ctx, n.Title, n.Body+" "+link); err != nil && !said && ctx.Err() == nil {
+				fmt.Fprintf(out, "notifications: %v; heedle won't show them\n", err)
+				said = true
+			}
+		}
+	}
 }
 
 // up starts Temporal's dev server (the temporal CLI on the PATH),
@@ -73,6 +141,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	fs.SetOutput(out)
 	home := fs.String("home", defaultHome(), "where heedle keeps its store, Temporal's database and logs")
 	listen := fs.String("listen", "127.0.0.1:8090", "address to serve the UI on")
+	notify := fs.Bool("notify", true, "tell you, with the system's notifications, when a scheduled run ends and when a write waits for your approval")
 	port := fs.Int("temporal-port", 7233, "Temporal frontend port, on 127.0.0.1")
 	uiPort := fs.Int("temporal-ui-port", 8233, "Temporal Web UI port, on 127.0.0.1")
 	var uiArgs []string
@@ -135,6 +204,9 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	}
 	defer stop()
 	fmt.Fprintf(out, "Temporal on %s (Web UI http://%s, log %s)\n", hostPort, temporalUI, logFile.Name())
+	if *notify {
+		go watch(ctx, sys, hostPort, queueOf(uiArgs), "http://"+*listen, out)
+	}
 	// The connectors file lives in the home too (a -connectors after --
 	// wins); it needn't exist until there is a connector.
 	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
@@ -264,4 +336,17 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 		return fmt.Errorf("podman machine start %s: %w", name, err)
 	}
 	return nil
+}
+
+// queueOf is the task queue the UI's flags name (-queue), else loom's.
+func queueOf(uiArgs []string) string {
+	for i, a := range uiArgs {
+		switch {
+		case (a == "-queue" || a == "--queue") && i+1 < len(uiArgs):
+			return uiArgs[i+1]
+		case strings.HasPrefix(a, "-queue=") || strings.HasPrefix(a, "--queue="):
+			return a[strings.Index(a, "=")+1:]
+		}
+	}
+	return "loom"
 }
