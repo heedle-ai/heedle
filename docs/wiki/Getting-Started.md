@@ -83,7 +83,7 @@ It prints the proposal and a line for each thing it needs, ready or missing with
 
 ## Notifications
 
-While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. `heedle up -notify=false` turns them off.
+While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
 
 ## Run programs from the terminal
 
