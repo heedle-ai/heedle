@@ -49,34 +49,26 @@ jobs:
         with:
           repository: heedle-ai/warp
           path: warp
-      - name: private-bobbin
-        # read-only deploy key on heedle-ai/bobbin
+      - name: sibling-bobbin
         uses: actions/checkout@v4
         with:
           repository: heedle-ai/bobbin
           path: bobbin
-          ssh-key: ${{ secrets.BOBBIN_DEPLOY_KEY }}
-      - name: private-reed
-        # read-only deploy key on heedle-ai/reed
+      - name: sibling-reed
         uses: actions/checkout@v4
         with:
           repository: heedle-ai/reed
           path: reed
-          ssh-key: ${{ secrets.REED_DEPLOY_KEY }}
-      - name: private-pirn
-        # read-only deploy key on heedle-ai/pirn
+      - name: sibling-pirn
         uses: actions/checkout@v4
         with:
           repository: heedle-ai/pirn
           path: pirn
-          ssh-key: ${{ secrets.PIRN_DEPLOY_KEY }}
-      - name: private-treadle
-        # read-only deploy key on heedle-ai/treadle
+      - name: sibling-treadle
         uses: actions/checkout@v4
         with:
           repository: heedle-ai/treadle
           path: treadle
-          ssh-key: ${{ secrets.TREADLE_DEPLOY_KEY }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: heedle/go.mod
@@ -123,9 +115,10 @@ jobs:
           got=$(cd dist && ls *.tar.gz | sed -E 's/^heedle_[^_]+_//' | sort | tr '\n' ' ')
           test "$got" = "darwin_arm64.tar.gz linux_amd64.tar.gz linux_arm64.tar.gz " || { echo "built: $got"; exit 1; }
           grep -q 'depends_on formula' dist/homebrew/Casks/heedle.rb || { echo 'the cask has no dependencies'; exit 1; }
-          # The releases are private: every download goes through the
-          # cask's token-reading strategy, and the cask is valid Ruby.
-          test "$(grep -c 'using: HeedlePrivateReleaseDownloadStrategy' dist/homebrew/Casks/heedle.rb)" = 3 || { echo 'an archive is downloaded without the private strategy'; exit 1; }
+          # The releases are public: the cask downloads each archive from
+          # the release with Homebrew's own download, and is valid Ruby.
+          if grep -q 'DownloadStrategy' dist/homebrew/Casks/heedle.rb; then echo 'the cask still has a download strategy'; exit 1; fi
+          test "$(grep -c 'url "https://github.com/heedle-ai/heedle/releases/download/' dist/homebrew/Casks/heedle.rb)" = 3 || { echo 'an archive is not downloaded from the public release'; exit 1; }
           ruby -c dist/homebrew/Casks/heedle.rb
       - name: cask
         # Homebrew itself loads the cask, in developer mode, where anything

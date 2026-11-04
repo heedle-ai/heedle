@@ -12,7 +12,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 
 ## Build it
 
-heedle builds against its sibling repositories, so clone them side by side. bobbin, reed, pirn and treadle are private for now, so you need access to them.
+heedle builds against its sibling repositories, so clone them side by side. All of them are public, under the MIT licence.
 
 ```sh
 mkdir heedle-ai && cd heedle-ai
@@ -26,15 +26,12 @@ go build -o heedle .
 
 ### Or install it with Homebrew (macOS on Apple Silicon)
 
-heedle's releases and its tap are private, so Homebrew downloads with your GitHub token. You need access to heedle-ai/heedle and heedle-ai/homebrew-tap, and to be signed in with the [GitHub CLI](https://cli.github.com) (`gh auth login`).
-
 ```sh
-brew tap heedle-ai/tap git@github.com:heedle-ai/homebrew-tap.git
 brew install --cask heedle-ai/tap/heedle
 heedle version
 ```
 
-This also installs Git, Podman and the Temporal CLI. `brew upgrade --cask heedle` upgrades it the same way. The cask uses `HOMEBREW_GITHUB_API_TOKEN` if you set it, and otherwise your `gh` login.
+Homebrew finds the tap (heedle-ai/homebrew-tap) by its name. This also installs Git, Podman and the Temporal CLI; `brew upgrade --cask heedle` upgrades it.
 
 ## Start everything
 

@@ -58,8 +58,8 @@ why the existing tool can't do it.
   (run directly, so heedle can see it exit and stop it), and `podman
   machine` on macOS. It never reimplements or patches them.
 - **Releases are GoReleaser's** (`.goreleaser.yaml`), from a `v*` tag
-  (`release.yml`). They and the tap are private, so the cask downloads
-  with the installer's `HOMEBREW_GITHUB_API_TOKEN`. CI's `release` step
+  (`release.yml`). They and the tap are public, so the cask downloads
+  with Homebrew's own download, no token. CI's `release` step
   only checks and builds a snapshot.
 - **Run every CI step before pushing,** not only the Go tests:
   `bash .github/invariants.sh`, and `goreleaser check` when the release
