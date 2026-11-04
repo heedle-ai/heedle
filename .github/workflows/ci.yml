@@ -124,9 +124,9 @@ jobs:
             podman system migrate
           fi
           podman --version
-          go test -count=1 -v -run 'TestE2E_Browse' . | tee e2e-images.log
+          go test -count=1 -v -run 'TestE2EImages_Browse' . | tee e2e-images.log
           if grep -q -- '--- SKIP' e2e-images.log; then echo 'a test skipped'; exit 1; fi
-          grep -q -- '--- PASS: TestE2E_Browse' e2e-images.log
+          grep -q -- '--- PASS: TestE2EImages_Browse' e2e-images.log
       - name: release
         # The GoReleaser configuration is valid and builds exactly the
         # supported platforms; nothing is published (release.yml does
