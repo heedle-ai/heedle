@@ -4,9 +4,10 @@
 //
 //	heedle up                      start everything; open http://127.0.0.1:8090
 //	heedle ui -store DIR ...       the UI (and a worker) alone: drawdown's flags
+//	heedle ask "REQUEST"           ask for something; heedle proposes how
 //	heedle run PROGRAM ...         any loom command: run, compile, worker, write,
-//	                               writes, skills, branch, merge, beliefs, secret,
-//	                               schedule, schedules
+//	                               ask, writes, skills, branch, merge, beliefs,
+//	                               secret, schedule, schedules
 //	heedle version
 package main
 
@@ -32,9 +33,12 @@ const usage = `usage:
                        start Temporal, a worker and the UI (open the URL it prints)
   heedle ui -store DIR [FLAGS]
                        the UI and a worker alone, against a Temporal you run
-  heedle COMMAND ...   a loom command: run, compile, worker, write, writes,
-                       skills, branch, merge, beliefs, secret, schedule,
-                       schedules (heedle COMMAND -h for its flags)
+  heedle ask [-then run|schedule] "WHAT YOU WANT DONE"
+                       heedle proposes how, says what it needs, and runs or
+                       schedules it if you say so
+  heedle COMMAND ...   a loom command: run, compile, worker, write, ask,
+                       writes, skills, branch, merge, beliefs, secret,
+                       schedule, schedules (heedle COMMAND -h for its flags)
   heedle version`
 
 func main() {

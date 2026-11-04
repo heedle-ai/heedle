@@ -64,6 +64,23 @@ To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, pu
 
 It asks for the value without showing it, and keeps it in the macOS Keychain or the Linux secret service under the service `heedle`. Or paste it on the UI's **connectors** page, which keeps it in the same keychain. Workers read keys for every step, so a key stored while heedle runs is used from the next step, with no restart. `heedle up` keeps the worker's connectors file at `~/.heedle/connectors.json` (until it exists, there are no connectors), and the worker reads it before every step too. The connectors page adds servers to it from the MCP Registry, signing you in where a server offers it (open heedle at `http://127.0.0.1:8090` for that), with their tokens going to your keychain and refreshed for you. Connectors that name a secret (`"tokenEnv": "MAPS_KEY"`) find it there from their next step, with no restart. Other programs running as you can read keychain items too; what the keychain keeps keys out of is records, logs and the agents' containers. `./heedle secret delete MAPS_KEY` removes one. `heedle up` sets `-store`, `-address`, `-temporal-ui` and `-listen` itself, and refuses them after `--`.
 
+## Ask heedle
+
+The home page opens with **What should heedle do?** Say what you want in plain words:
+
+> Plan three days in Lisbon from 12 December. I like food, tiles and viewpoints.
+
+heedle's Claude answers with what it would do: a summary, the program it would run (drawn as a graph), and what that needs, each ready or not, with **Connect** beside anything missing. It uses the skills you've approved and the commands heedle has; if nothing fits, it says which skill would, and **Teach heedle this skill** has Claude write it for your review. Ask again to change it ("make it four days", "every Monday at 8"); a request that says when gets a button that schedules it. Nothing runs until you press **Run it now** or the schedule button. Asking needs the Anthropic key, like `ask` steps.
+
+From the terminal, with `heedle up` running:
+
+```sh
+./heedle ask "Every weekday at 8, check whether shipment 4471 will be late"
+./heedle ask -then run "Plan three days in Lisbon from 12 December. I like food and tiles."
+```
+
+It prints the proposal and a line for each thing it needs, ready or missing with how to set it up. `-then run` runs it and `-then schedule` schedules it as proposed, each only when everything it needs is ready.
+
 ## Run programs from the terminal
 
 With `heedle up` running, every loom command works against it:
@@ -82,7 +99,7 @@ The trip planner is a skill and two connectors, with no code: treadle's [`trip-p
 
 1. **Connect search and maps.** On the **connectors** page, find a web search server and a maps server in the MCP Registry, and add each, signing in or pasting a key. Name them `search` and `maps`: the skill asks for those names.
 2. **Add the skill.** On the **skills** page, import `https://github.com/heedle-ai/treadle/tree/main/skills/trip-planner`, or upload its folder. It asks for connectors, so it waits for your review: the review shows `search maps` in red. Approve it.
-3. **Run it**, with an agent image (`-- -agent-image <ID>` on `heedle up`):
+3. **Ask for a trip** on the home page ("Plan three days in Lisbon from 12 December. I like food, tiles and viewpoints."), and heedle proposes the trip planner with those arguments, or **run it** yourself, with an agent image (`-- -agent-image <ID>` on `heedle up`):
 
 ```lisp
 (trip-planner "Lisbon" "2026-12-12" "2026-12-16" "food, tiles, viewpoints")
