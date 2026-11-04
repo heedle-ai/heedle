@@ -33,6 +33,9 @@ type system struct {
 	lookPath func(string) (string, error)
 	// output runs a program and returns its standard output.
 	output func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// combined runs a program and returns its standard output and error
+	// together, so heedle can say why it failed in its own words.
+	combined func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// temporal starts Temporal's dev server (path, with args), writing its
 	// output to log, waits until its frontend at hostPort answers, and
 	// returns a function that stops it. If it can't, nothing is left
@@ -58,6 +61,11 @@ func (s system) withDefaults(out io.Writer) system {
 			cmd := exec.CommandContext(ctx, name, args...)
 			cmd.Stderr = out
 			return cmd.Output()
+		}
+	}
+	if s.combined == nil {
+		s.combined = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput()
 		}
 	}
 	if s.temporal == nil {

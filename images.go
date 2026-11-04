@@ -58,6 +58,17 @@ var pinned = func() images {
 	return im
 }()
 
+// reason is the last line a failed command wrote, else its error: what
+// podman says went wrong, in one line (review 36: its own lines came
+// first and heedle's said only "exit status 125").
+func reason(b []byte, err error) string {
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+		return strings.TrimPrefix(last, "Error: ")
+	}
+	return err.Error()
+}
+
 // hasFlag says whether args (drawdown's, after --) set the flag name.
 func hasFlag(args []string, name string) bool {
 	for _, a := range args {
@@ -85,10 +96,14 @@ func withImages(ctx context.Context, sys system, podman string, uiArgs []string,
 		if hasFlag(uiArgs, i.flag) {
 			continue
 		}
-		if _, err := sys.output(ctx, podman, "image", "exists", i.ref); err != nil {
-			fmt.Fprintf(out, "Downloading the %s, once…\n", i.what)
-			if _, err := sys.output(ctx, podman, "pull", "--quiet", i.ref); err != nil {
-				fmt.Fprintf(out, "Couldn't download the %s (%v), so those steps won't run. Run heedle up again when you're online, or give your own with heedle up -- -%s ID.\n", i.what, err, i.flag)
+		if _, err := sys.combined(ctx, podman, "image", "exists", i.ref); err != nil {
+			fmt.Fprintf(out, "Downloading the %s, once (a few hundred MB; this can take some minutes)…\n", i.what)
+			b, err := sys.combined(ctx, podman, "pull", "--quiet", i.ref)
+			if ctx.Err() != nil {
+				return flags // stopped: nothing more to say
+			}
+			if err != nil {
+				fmt.Fprintf(out, "Couldn't download the %s (%s), so those steps won't run. Run heedle up again to retry, or give your own with heedle up -- -%s ID.\n", i.what, reason(b, err), i.flag)
 				continue
 			}
 		}

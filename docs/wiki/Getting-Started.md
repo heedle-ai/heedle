@@ -6,7 +6,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 
 - Go 1.25 or later, to build it.
 - Git 2.42 or later.
-- [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you, and on first run downloads the ready-made browser and agent images it gives its worker (see [How It Works](How-It-Works#heedle-up)).
+- [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you. On first run, on macOS and Linux, it downloads the ready-made browser and agent images it gives its worker (see [How It Works](How-It-Works#heedle-up)).
 - The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
 - For `ask` and `agent` steps, an Anthropic API key: stored once with `heedle secret set ANTHROPIC_API_KEY`, or in `ANTHROPIC_API_KEY` where heedle runs. On Linux the keychain needs `secret-tool` (`libsecret-tools` on Debian and Ubuntu) and a running secret service such as GNOME Keyring.
 
