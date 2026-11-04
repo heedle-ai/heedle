@@ -6,7 +6,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 
 - Go 1.25 or later, to build it.
 - Git 2.42 or later.
-- [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you.
+- [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you, and on first run downloads the ready-made browser and agent images it gives its worker (see [How It Works](How-It-Works#heedle-up)).
 - The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
 - For `ask` and `agent` steps, an Anthropic API key: stored once with `heedle secret set ANTHROPIC_API_KEY`, or in `ANTHROPIC_API_KEY` where heedle runs. On Linux the keychain needs `secret-tool` (`libsecret-tools` on Debian and Ubuntu) and a running secret service such as GNOME Keyring.
 
@@ -100,7 +100,7 @@ The trip planner is a skill and two connectors, with no code: treadle's [`trip-p
 
 1. **Connect search and maps.** On the **connectors** page, find a web search server and a maps server in the MCP Registry, and add each, signing in or pasting a key. Name them `search` and `maps`: the skill asks for those names.
 2. **Add the skill.** On the **skills** page, import `https://github.com/heedle-ai/treadle/tree/main/skills/trip-planner`, or upload its folder. It asks for connectors, so it waits for your review: the review shows `search maps` in red. Approve it.
-3. **Ask for a trip** on the home page ("Plan three days in Lisbon from 12 December. I like food, tiles and viewpoints."), and heedle proposes the trip planner with those arguments, or **run it** yourself, with an agent image (`-- -agent-image <ID>` on `heedle up`):
+3. **Ask for a trip** on the home page ("Plan three days in Lisbon from 12 December. I like food, tiles and viewpoints."), and heedle proposes the trip planner with those arguments, or **run it** yourself:
 
 ```lisp
 (trip-planner "Lisbon" "2026-12-12" "2026-12-16" "food, tiles, viewpoints")

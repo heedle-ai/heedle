@@ -202,8 +202,13 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 		}
 		l.Close()
 	}
-	if err := checkPodman(ctx, sys, out); err != nil {
+	podman, err := checkPodman(ctx, sys, out)
+	if err != nil {
 		return err
+	}
+	var images []string
+	if podman != "" {
+		images = withImages(ctx, sys, podman, uiArgs, pinned, out)
 	}
 
 	logFile, err := os.OpenFile(filepath.Join(*home, "temporal.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -225,7 +230,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	// The connectors file lives in the home too (a -connectors after --
 	// wins); it needn't exist until there is a connector.
 	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
-		"-connectors", filepath.Join(*home, "connectors.json")}, uiArgs...), out)
+		"-connectors", filepath.Join(*home, "connectors.json")}, append(images, uiArgs...)...), out)
 }
 
 // ownFlags are drawdown's flags heedle up sets; passing them after --
@@ -302,19 +307,20 @@ func defaultHome() string {
 
 // checkPodman says what's missing without Podman (programs without
 // container, agent or browse steps still run), and on macOS makes sure
-// Podman's virtual machine exists and is running.
-func checkPodman(ctx context.Context, sys system, out io.Writer) error {
+// Podman's virtual machine exists and is running. It returns Podman's
+// path, or "" without it.
+func checkPodman(ctx context.Context, sys system, out io.Writer) (string, error) {
 	podman, err := sys.lookPath("podman")
 	if err != nil {
 		fmt.Fprintln(out, "podman isn't on the PATH: container, agent and browse steps won't run (macOS: brew install podman; Linux: your package manager)")
-		return nil
+		return "", nil
 	}
 	if sys.goos != "darwin" {
-		return nil
+		return podman, nil
 	}
 	b, err := sys.output(ctx, podman, "machine", "list", "--format", "json")
 	if err != nil {
-		return fmt.Errorf("podman machine list: %w", err)
+		return "", fmt.Errorf("podman machine list: %w", err)
 	}
 	var machines []struct {
 		Name             string
@@ -322,25 +328,25 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 		Starting         bool
 	}
 	if err := json.Unmarshal(b, &machines); err != nil {
-		return fmt.Errorf("podman machine list: %w", err)
+		return "", fmt.Errorf("podman machine list: %w", err)
 	}
 	if len(machines) == 0 {
 		fmt.Fprintln(out, "Creating Podman's virtual machine (podman machine init; this takes a few minutes, once)…")
 		if _, err := sys.output(ctx, podman, "machine", "init"); err != nil {
-			return fmt.Errorf("podman machine init: %w (if it left a machine half made, remove it with podman machine rm, then run heedle up again)", err)
+			return "", fmt.Errorf("podman machine init: %w (if it left a machine half made, remove it with podman machine rm, then run heedle up again)", err)
 		}
 		fmt.Fprintln(out, "Starting Podman's virtual machine (podman machine start)…")
 		if _, err := sys.output(ctx, podman, "machine", "start"); err != nil {
-			return fmt.Errorf("podman machine start: %w", err)
+			return "", fmt.Errorf("podman machine start: %w", err)
 		}
-		return nil
+		return podman, nil
 	}
 	// Podman runs one machine at a time; one already running or starting
 	// is used as it is (review 21).
 	name := machines[0].Name
 	for _, m := range machines {
 		if m.Running || m.Starting {
-			return nil
+			return podman, nil
 		}
 		if m.Default {
 			name = m.Name
@@ -348,9 +354,9 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Starting Podman's virtual machine %s (podman machine start)…\n", name)
 	if _, err := sys.output(ctx, podman, "machine", "start", name); err != nil {
-		return fmt.Errorf("podman machine start %s: %w", name, err)
+		return "", fmt.Errorf("podman machine start %s: %w", name, err)
 	}
-	return nil
+	return podman, nil
 }
 
 // maxShown bounds the notifications shown at once; one more says how

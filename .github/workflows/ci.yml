@@ -98,6 +98,35 @@ jobs:
           go test -count=1 -v -run 'TestE2E_' . | tee e2e.log
           if grep -q -- '--- SKIP' e2e.log; then echo 'a test skipped'; exit 1; fi
           grep -q -- '--- PASS: TestE2E_Up' e2e.log
+      - name: images-pinned
+        # images.json pins each image to content; never a tag (roadmap 9.1).
+        working-directory: heedle
+        run: |
+          test "$(grep -cE '"(browser|agent)": "ghcr\.io/heedle-ai/[a-z-]+@sha256:[0-9a-f]{64}"' images.json)" = 2 || { cat images.json; exit 1; }
+          if grep -q ':latest' images.json; then exit 1; fi
+      - name: e2e-images
+        # A fresh install's browse step: heedle up pulls its pinned images
+        # anonymously and the worker browses with them (roadmap 9.1). Linux
+        # only: GitHub's macOS runners have no Podman.
+        if: runner.os == 'Linux'
+        working-directory: heedle
+        env:
+          HEEDLE_E2E_IMAGES: "1"
+        run: |
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          if command -v podman >/dev/null; then :; else
+            sudo apt-get update >/dev/null
+            sudo apt-get install -y podman >/dev/null
+          fi
+          # Rootless Podman needs subordinate IDs (reed's image.yml, review 36).
+          if grep -q "^$USER:" /etc/subuid && grep -q "^$USER:" /etc/subgid; then :; else
+            sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$USER"
+            podman system migrate
+          fi
+          podman --version
+          go test -count=1 -v -run 'TestE2E_Browse' . | tee e2e-images.log
+          if grep -q -- '--- SKIP' e2e-images.log; then echo 'a test skipped'; exit 1; fi
+          grep -q -- '--- PASS: TestE2E_Browse' e2e-images.log
       - name: release
         # The GoReleaser configuration is valid and builds exactly the
         # supported platforms; nothing is published (release.yml does

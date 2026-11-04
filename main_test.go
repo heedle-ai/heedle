@@ -62,6 +62,8 @@ type machine struct {
 	stopped   int
 	served    []string
 	failServe error
+	missing   map[string]bool // images podman doesn't have
+	failPull  error
 }
 
 func (m *machine) system() system {
@@ -79,6 +81,15 @@ func (m *machine) system() system {
 			m.calls = append(m.calls, filepath.Base(name)+" "+strings.Join(args, " "))
 			if strings.Join(args, " ") == "machine list --format json" {
 				return []byte(m.machines), nil
+			}
+			if len(args) == 3 && args[0] == "image" && args[1] == "exists" && m.missing[args[2]] {
+				return nil, errors.New("exit status 1")
+			}
+			if len(args) > 0 && args[0] == "pull" {
+				if m.failPull != nil {
+					return nil, m.failPull
+				}
+				delete(m.missing, args[len(args)-1])
 			}
 			return nil, nil
 		},
@@ -119,12 +130,12 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
 		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-browser-image", pinned.Browser, "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
-	if len(m.calls) != 0 {
-		t.Errorf("on Linux, heedle up ran %q", m.calls)
+	if got := strings.Join(m.calls, "|"); got != "podman image exists "+pinned.Browser {
+		t.Errorf("on Linux, heedle up ran %q", got)
 	}
 
 	m = &machine{goos: "linux", has: map[string]bool{"git": true, "temporal": true}, failServe: errors.New("address in use")}
@@ -180,13 +191,104 @@ func TestInv_UpPreparesPodmanOnMacOnly(t *testing.T) {
 		if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, m.system()); err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.Join(m.calls, "|"); got != c.want {
+		var machine []string
+		for _, call := range m.calls {
+			if strings.HasPrefix(call, "podman machine") {
+				machine = append(machine, call)
+			}
+		}
+		if got := strings.Join(machine, "|"); got != c.want {
 			t.Errorf("%s with %s: ran %q, want %q", c.goos, c.machines, got, c.want)
 		}
 	}
 	bad := &machine{goos: "darwin", machines: "not json", has: map[string]bool{"git": true, "podman": true, "temporal": true}}
 	if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, bad.system()); err == nil || bad.started != nil {
 		t.Errorf("an unreadable machine list: %v", err)
+	}
+}
+
+// TestInv_ImagesArePinned: images.json names heedle's browser and agent
+// images, each pinned to content (name@sha256:<64 hex>), and nothing
+// else; a tag, a short digest, a missing image, an unknown field or a
+// second object is refused. (Roadmap 9.1.)
+func TestInv_ImagesArePinned(t *testing.T) {
+	if _, err := readImages(imagesJSON); err != nil {
+		t.Fatal(err)
+	}
+	d := strings.Repeat("a", 64)
+	for _, bad := range []string{
+		`{"browser": "ghcr.io/heedle-ai/reed-browser:latest", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"}`,
+		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:abc", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"}`,
+		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:` + d + `"}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "extra": "z"}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"} {}`,
+		`{"browser": "-x@sha256:` + d + `", "agent": "y@sha256:` + d + `"}`,
+	} {
+		if _, err := readImages([]byte(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}
+
+// TestInv_UpGivesTheWorkerImages: heedle up pulls each of its pinned
+// images that Podman doesn't have, once, and gives both to the worker; an
+// image given after -- is the person's, neither pulled nor replaced; an
+// image that can't be pulled is said in a line and left out, and heedle
+// still starts; without Podman, nothing is pulled or given. (Roadmap 9.1:
+// on a fresh install, browse and agent steps failed for want of images.)
+func TestInv_UpGivesTheWorkerImages(t *testing.T) {
+	start := func(m *machine, extra ...string) (string, string) {
+		t.Helper()
+		var out bytes.Buffer
+		args := append([]string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, extra...)
+		if err := up(ctx, args, &out, m.system()); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(m.served[10:], " "), out.String()
+	}
+	has := map[string]bool{"git": true, "podman": true, "temporal": true}
+
+	m := &machine{goos: "darwin", machines: `[{"Name":"m","Running":true}]`, has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true}}
+	served, out := start(m)
+	if served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent {
+		t.Errorf("served %q", served)
+	}
+	pulls := 0
+	for _, c := range m.calls {
+		if strings.HasPrefix(c, "podman pull") {
+			pulls++
+		}
+	}
+	if pulls != 2 || strings.Count(out, "Downloading the") != 2 {
+		t.Errorf("pulled %d times:\n%s", pulls, out)
+	}
+	// Already here: nothing pulled again.
+	m.calls, m.served = nil, nil
+	m.started, m.stopped = nil, 0
+	if served, out := start(m); served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent || strings.Contains(strings.Join(m.calls, "|"), "pull") || strings.Contains(out, "Downloading") {
+		t.Errorf("pulled again: %q %q", m.calls, out)
+	}
+
+	// The person's own image wins, in any spelling.
+	for _, own := range [][]string{{"--", "-agent-image", "mine"}, {"--", "--agent-image=mine"}} {
+		m := &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true}}
+		served, _ := start(m, own...)
+		if strings.Contains(served, pinned.Agent) || strings.Contains(strings.Join(m.calls, "|"), pinned.Agent) || !strings.Contains(served, "-browser-image "+pinned.Browser) {
+			t.Errorf("%q: served %q, ran %q", own, served, m.calls)
+		}
+	}
+
+	// Offline: said, left out, and heedle still starts.
+	m = &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true}, failPull: errors.New("no network")}
+	served, out = start(m)
+	if served != "-agent-image "+pinned.Agent || !strings.Contains(out, "Couldn't download the browser image") || !strings.Contains(out, "-browser-image ID") {
+		t.Errorf("a pull that fails: served %q\n%s", served, out)
+	}
+
+	// No Podman: nothing to pull, nothing given.
+	m = &machine{goos: "linux", has: map[string]bool{"git": true, "temporal": true}}
+	if served, _ := start(m); served != "" || len(m.calls) != 0 {
+		t.Errorf("without Podman: served %q, ran %q", served, m.calls)
 	}
 }
 
@@ -472,5 +574,44 @@ func TestInv_NotificationsAreTheSystems(t *testing.T) {
 		if got := queueOf(strings.Fields(args)); got != want {
 			t.Errorf("queueOf(%q) = %q", args, got)
 		}
+	}
+}
+
+// TestE2E_Browse runs heedle up for real, as a fresh install does: it
+// downloads heedle's pinned images with Podman and gives them to its
+// worker, so a browse step runs with no flags and nothing built (roadmap
+// 9.1). CI's e2e step runs it on Linux, with HEEDLE_E2E_IMAGES=1.
+func TestE2E_Browse(t *testing.T) {
+	if os.Getenv("HEEDLE_E2E_IMAGES") != "1" {
+		t.Skip("set HEEDLE_E2E_IMAGES=1 to pull heedle's images and browse with them")
+	}
+	c, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	address := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- up(c, []string{"-home", t.TempDir(), "-listen", fmt.Sprintf("127.0.0.1:%d", freePort(t)), "-notify=false",
+			"-temporal-port", strings.TrimPrefix(address, "127.0.0.1:"), "-temporal-ui-port", fmt.Sprint(freePort(t))}, &out, system{})
+	}()
+	for !strings.Contains(out.String(), "drawdown on") {
+		select {
+		case err := <-done:
+			t.Fatalf("heedle up stopped: %v\n%s", err, out.String())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if strings.Contains(out.String(), "Couldn't download") {
+		t.Fatalf("an image didn't download:\n%s", out.String())
+	}
+	var cli bytes.Buffer
+	if err := run(c, []string{"run", "-address", address, `(browse "https://example.org/")`}, &cli); err != nil || !strings.Contains(cli.String(), "Example Domain") {
+		t.Errorf("browse: %v\n%s\nheedle up said:\n%s", err, cli.String(), out.String())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("heedle up kept running after it was stopped")
 	}
 }
