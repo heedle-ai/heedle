@@ -577,11 +577,11 @@ func TestInv_NotificationsAreTheSystems(t *testing.T) {
 	}
 }
 
-// TestE2E_Browse runs heedle up for real, as a fresh install does: it
+// TestE2EImages_Browse runs heedle up for real, as a fresh install does: it
 // downloads heedle's pinned images with Podman and gives them to its
 // worker, so a browse step runs with no flags and nothing built (roadmap
 // 9.1). CI's e2e step runs it on Linux, with HEEDLE_E2E_IMAGES=1.
-func TestE2E_Browse(t *testing.T) {
+func TestE2EImages_Browse(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_IMAGES") != "1" {
 		t.Skip("set HEEDLE_E2E_IMAGES=1 to pull heedle's images and browse with them")
 	}
