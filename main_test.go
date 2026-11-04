@@ -66,6 +66,27 @@ type machine struct {
 	failPull  error
 }
 
+// output answers as Podman would: its machine list, images it has, and
+// pulls (a failed pull writes podman's own error lines).
+func (m *machine) output(_ context.Context, name string, args ...string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, filepath.Base(name)+" "+strings.Join(args, " "))
+	if strings.Join(args, " ") == "machine list --format json" {
+		return []byte(m.machines), nil
+	}
+	if len(args) == 3 && args[0] == "image" && args[1] == "exists" && m.missing[args[2]] {
+		return nil, errors.New("exit status 1")
+	}
+	if len(args) > 0 && args[0] == "pull" {
+		if m.failPull != nil {
+			return []byte("Trying to pull " + args[len(args)-1] + "...\nError: " + m.failPull.Error() + "\n"), errors.New("exit status 125")
+		}
+		delete(m.missing, args[len(args)-1])
+	}
+	return nil, nil
+}
+
 func (m *machine) system() system {
 	return system{
 		goos: m.goos,
@@ -75,24 +96,8 @@ func (m *machine) system() system {
 			}
 			return "", errors.New("not found")
 		},
-		output: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			m.calls = append(m.calls, filepath.Base(name)+" "+strings.Join(args, " "))
-			if strings.Join(args, " ") == "machine list --format json" {
-				return []byte(m.machines), nil
-			}
-			if len(args) == 3 && args[0] == "image" && args[1] == "exists" && m.missing[args[2]] {
-				return nil, errors.New("exit status 1")
-			}
-			if len(args) > 0 && args[0] == "pull" {
-				if m.failPull != nil {
-					return nil, m.failPull
-				}
-				delete(m.missing, args[len(args)-1])
-			}
-			return nil, nil
-		},
+		output:   m.output,
+		combined: m.output,
 		temporal: func(_ context.Context, path string, args []string, _ io.Writer, hostPort string) (func() error, error) {
 			m.started, m.hostPort = append([]string{path}, args...), hostPort
 			return func() error { m.stopped++; return nil }, nil
@@ -279,10 +284,12 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 	}
 
 	// Offline: said, left out, and heedle still starts.
-	m = &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true}, failPull: errors.New("no network")}
+	// Review 36: in one line, with podman's reason, not its exit status.
+	m = &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true}, failPull: errors.New("unauthorized")}
 	served, out = start(m)
-	if served != "-agent-image "+pinned.Agent || !strings.Contains(out, "Couldn't download the browser image") || !strings.Contains(out, "-browser-image ID") {
-		t.Errorf("a pull that fails: served %q\n%s", served, out)
+	if served != "-agent-image "+pinned.Agent || strings.Contains(out, "Trying to pull") || strings.Contains(out, "Error:") || !strings.Contains(out, "Couldn't download the browser image") ||
+		!strings.Contains(out, "(unauthorized)") || !strings.Contains(out, "-browser-image ID") {
+		t.Errorf("a pull that fails: served %q\n%q", served, out)
 	}
 
 	// No Podman: nothing to pull, nothing given.
@@ -580,7 +587,7 @@ func TestInv_NotificationsAreTheSystems(t *testing.T) {
 // TestE2EImages_Browse runs heedle up for real, as a fresh install does: it
 // downloads heedle's pinned images with Podman and gives them to its
 // worker, so a browse step runs with no flags and nothing built (roadmap
-// 9.1). CI's e2e step runs it on Linux, with HEEDLE_E2E_IMAGES=1.
+// 9.1). CI's e2e-images step runs it on Linux, with HEEDLE_E2E_IMAGES=1.
 func TestE2EImages_Browse(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_IMAGES") != "1" {
 		t.Skip("set HEEDLE_E2E_IMAGES=1 to pull heedle's images and browse with them")
