@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -280,9 +281,15 @@ func TestE2E_Up(t *testing.T) {
 	var out syncBuffer
 	done := make(chan error, 1)
 	uiPort := fmt.Sprint(freePort(t))
+	// Notifications, recorded instead of shown (roadmap 8.5).
+	var notes syncBuffer
+	sys := system{notifyEvery: time.Second, notify: func(_ context.Context, title, body string) error {
+		fmt.Fprintf(&notes, "%s | %s\n", title, body)
+		return nil
+	}}
 	go func() {
 		done <- up(c, []string{"-home", home, "-listen", listen,
-			"-temporal-port", strings.TrimPrefix(address, "127.0.0.1:"), "-temporal-ui-port", uiPort}, &out, system{})
+			"-temporal-port", strings.TrimPrefix(address, "127.0.0.1:"), "-temporal-ui-port", uiPort}, &out, sys)
 	}()
 	base := "http://" + listen
 	for !strings.Contains(out.String(), "drawdown on") {
@@ -342,7 +349,8 @@ func TestE2E_Up(t *testing.T) {
 	// recorded like any other, then deleted (roadmap 7.3).
 	post("/api/schedules", `{"name":"e2e-digest","program":"(pipe (echo \"scheduled\") echo)","every":"24h"}`)
 	post("/api/schedules/e2e-digest/run", `{}`)
-	for scheduled := ""; scheduled == ""; {
+	scheduled := ""
+	for scheduled == "" {
 		var v struct {
 			Schedules []struct {
 				Name   string `json:"name"`
@@ -384,6 +392,19 @@ func TestE2E_Up(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	// heedle up tells you the scheduled run ended, once, with a link to it;
+	// the run started by hand isn't news.
+	for !strings.Contains(notes.String(), "heedle: e2e-digest finished") {
+		select {
+		case <-c.Done():
+			t.Fatalf("no notification of the scheduled run: %q", notes.String())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	time.Sleep(3 * time.Second) // a few more looks
+	if n := strings.Count(notes.String(), "e2e-digest finished"); n != 1 || !strings.Contains(notes.String(), base+"/#/run/"+url.PathEscape(scheduled)+"/") || strings.Count(notes.String(), "\n") != 1 {
+		t.Errorf("notifications: %q", notes.String())
+	}
 	var sched bytes.Buffer
 	if err := run(c, []string{"schedules", "-address", address, "-delete", "e2e-digest"}, &sched); err != nil {
 		t.Errorf("heedle schedules -delete: %v\n%s", err, sched.String())
@@ -421,5 +442,34 @@ func TestE2E_Up(t *testing.T) {
 	if conn, err := net.Dial("tcp", address); err == nil {
 		conn.Close()
 		t.Error("Temporal still answers after heedle up stopped")
+	}
+}
+
+// TestInv_NotificationsAreTheSystems: heedle up shows notifications with
+// the system's own tool, the title and body as its arguments, never in a
+// script (osascript on macOS, notify-send on Linux, which it says how to
+// install if it's missing); it watches the queue the UI is given.
+// (Roadmap 8.5.)
+func TestInv_NotificationsAreTheSystems(t *testing.T) {
+	evil := `x" & (do shell script "touch /tmp/pwned") & "`
+	name, args, err := notifyCommand("darwin", nil, "heedle: done", evil)
+	if err != nil || name != "osascript" || args[len(args)-1] != evil || args[len(args)-2] != "heedle: done" || strings.Contains(strings.Join(args[:len(args)-2], " "), evil) {
+		t.Errorf("macOS: %s %q %v", name, args, err)
+	}
+	found := func(string) (string, error) { return "/usr/bin/notify-send", nil }
+	missing := func(string) (string, error) { return "", errors.New("not found") }
+	if name, args, err := notifyCommand("linux", found, "-t", "body"); err != nil || name != "notify-send" || strings.Join(args, " ") != "--app-name=heedle -- -t body" {
+		t.Errorf("Linux: %s %q %v", name, args, err)
+	}
+	if _, _, err := notifyCommand("linux", missing, "t", "b"); err == nil || !strings.Contains(err.Error(), "libnotify-bin") {
+		t.Errorf("Linux without notify-send: %v", err)
+	}
+	if _, _, err := notifyCommand("windows", found, "t", "b"); err == nil {
+		t.Error("windows")
+	}
+	for args, want := range map[string]string{"": "loom", "-queue research": "research", "--queue=x": "x", "-agent-image i": "loom"} {
+		if got := queueOf(strings.Fields(args)); got != want {
+			t.Errorf("queueOf(%q) = %q", args, got)
+		}
 	}
 }
