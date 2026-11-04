@@ -452,8 +452,9 @@ func TestE2E_Up(t *testing.T) {
 // (Roadmap 8.5.)
 func TestInv_NotificationsAreTheSystems(t *testing.T) {
 	evil := `x" & (do shell script "touch /tmp/pwned") & "`
-	name, args, err := notifyCommand("darwin", nil, "heedle: done", evil)
-	if err != nil || name != "osascript" || args[len(args)-1] != evil || args[len(args)-2] != "heedle: done" || strings.Contains(strings.Join(args[:len(args)-2], " "), evil) {
+	name, args, err := notifyCommand("darwin", nil, "-heedle: done", evil)
+	// After "--", so a title starting with "-" is never an option (review 33).
+	if err != nil || name != "osascript" || args[len(args)-1] != evil || args[len(args)-2] != "-heedle: done" || args[len(args)-3] != "--" || strings.Contains(strings.Join(args[:len(args)-2], " "), evil) {
 		t.Errorf("macOS: %s %q %v", name, args, err)
 	}
 	found := func(string) (string, error) { return "/usr/bin/notify-send", nil }

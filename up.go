@@ -88,7 +88,7 @@ func (s system) withDefaults(out io.Writer) system {
 func notifyCommand(goos string, lookPath func(string) (string, error), title, body string) (string, []string, error) {
 	switch goos {
 	case "darwin":
-		return "osascript", []string{"-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, body}, nil
+		return "osascript", []string{"-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", "--", title, body}, nil
 	case "linux":
 		if _, err := lookPath("notify-send"); err != nil {
 			return "", nil, errors.New("notify-send isn't installed (Debian and Ubuntu: libnotify-bin)")
@@ -109,7 +109,7 @@ func watch(ctx context.Context, sys system, hostPort, queue, base string, out io
 	}
 	defer c.Close()
 	w := &loom.Watcher{Client: c, Queue: queue, Since: time.Now()}
-	said := false
+	said, down := false, false
 	t := time.NewTicker(sys.notifyEvery)
 	defer t.Stop()
 	for {
@@ -118,13 +118,28 @@ func watch(ctx context.Context, sys system, hostPort, queue, base string, out io
 			return
 		case <-t.C:
 		}
-		notices, _ := w.Check(ctx)
-		for _, n := range notices {
-			link := base + "/#/run/" + url.PathEscape(n.Workflow) + "/" + url.PathEscape(n.Run)
-			if err := sys.notify(ctx, n.Title, n.Body+" "+link); err != nil && !said && ctx.Err() == nil {
+		notices, err := w.Check(ctx)
+		// Say once that Temporal can't be asked, and once that it can again
+		// (review 33: it said nothing).
+		if err != nil && !down && ctx.Err() == nil {
+			fmt.Fprintf(out, "notifications: can't ask Temporal: %v\n", err)
+		} else if err == nil && down {
+			fmt.Fprintln(out, "notifications: Temporal answers again")
+		}
+		down = err != nil
+		show := func(title, body string) {
+			if err := sys.notify(ctx, title, body); err != nil && !said && ctx.Err() == nil {
 				fmt.Fprintf(out, "notifications: %v; heedle won't show them\n", err)
 				said = true
 			}
+		}
+		for i, n := range notices {
+			if i == maxShown {
+				// Many at once: one more says how many, rather than a flood.
+				show("heedle: "+strconv.Itoa(len(notices)-maxShown)+" more", "Scheduled runs ended or writes wait for you. "+base)
+				break
+			}
+			show(n.Title, n.Body+" "+base+"/#/run/"+url.PathEscape(n.Workflow)+"/"+url.PathEscape(n.Run))
 		}
 	}
 }
@@ -337,6 +352,10 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) error {
 	}
 	return nil
 }
+
+// maxShown bounds the notifications shown at once; one more says how
+// many others there are.
+const maxShown = 5
 
 // queueOf is the task queue the UI's flags name (-queue), else loom's.
 func queueOf(uiArgs []string) string {
