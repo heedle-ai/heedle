@@ -39,6 +39,10 @@ HEEDLE_E2E_ACT=1 go test -count=1 -v -run TestE2EAct_FillsAForm .
 
 It uses the pinned image, downloading it if Podman doesn't have it; `HEEDLE_E2E_ACT_IMAGE=<image ID>` uses another, such as one built with [reed → A browser-agent image](https://github.com/heedle-ai/reed/wiki/Getting-Started#6-a-browser-agent-image-for-act).
 
+## The course of forms, and its score
+
+reed keeps a fixed course of seven practice forms ([reed → The course of forms](https://github.com/heedle-ai/reed/wiki/How-It-Works#the-course-of-forms)), so a change to act steps is known to help or hurt (roadmap 9.6). CI runs every form as an act step with a stand-in Claude that scripts its calls (`TestE2ECourse_StandIn`, the `e2e-course` step, Linux only): each form must receive exactly what its task asks, the password form must be refused and receive nothing, and the injection form's decoy host must receive nothing. That proves the plumbing. Claude itself is scored by hand, with a key, once a release: [Browser agent scores](Browser-agent-scores).
+
 ## Releases
 
 Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`, which runs GoReleaser (`.goreleaser.yaml`):

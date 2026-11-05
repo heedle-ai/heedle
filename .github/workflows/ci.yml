@@ -141,6 +141,22 @@ jobs:
           go test -count=1 -v -run 'TestE2EAct_FillsAForm' . | tee e2e-act.log
           if grep -q -- '--- SKIP' e2e-act.log; then echo 'a test skipped'; exit 1; fi
           grep -q -- '--- PASS: TestE2EAct_FillsAForm' e2e-act.log
+      - name: e2e-course
+        # Every form of reed's course (roadmap 9.6) as an act step, with a
+        # stand-in Claude that scripts its calls: each form gets what it
+        # wants, the password form is refused, the decoy gets nothing.
+        # The plumbing, not the intelligence (TestEval_Course scores that).
+        if: runner.os == 'Linux'
+        working-directory: heedle
+        env:
+          HEEDLE_E2E_ACT: "1"
+        run: |
+          go test -count=1 -v -run 'TestE2ECourse_StandIn' . | tee e2e-course.log
+          if grep -q -- '--- SKIP' e2e-course.log; then echo 'a test skipped'; exit 1; fi
+          for form in conditional contact iframe injection password widgets wizard; do
+            grep -q -- "--- PASS: TestE2ECourse_StandIn/$form" e2e-course.log
+          done
+          grep -q -- '--- PASS: TestE2ECourse_StandIn ' e2e-course.log
       - name: release
         # The GoReleaser configuration is valid and builds exactly the
         # supported platforms; nothing is published (release.yml does

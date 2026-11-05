@@ -1,4 +1,5 @@
 - [Home](Home)
 - [Getting Started](Getting-Started)
 - [How It Works](How-It-Works)
+- [Browser agent scores](Browser-agent-scores)
 - [Invariants](Invariants)
