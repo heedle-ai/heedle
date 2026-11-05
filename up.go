@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net"
@@ -118,7 +119,10 @@ func notifyCommand(goos string, lookPath func(string) (string, error), title, bo
 		if _, err := lookPath("notify-send"); err != nil {
 			return "", nil, errors.New("notify-send isn't installed (Debian and Ubuntu: libnotify-bin)")
 		}
-		return "notify-send", []string{"--app-name=heedle", "--", title, body}, nil
+		// notify-send's body is markup to many notification servers, and a
+		// form's summary is Claude's words about a page: escape it, so a
+		// page can't put a link in a notification (review 41).
+		return "notify-send", []string{"--app-name=heedle", "--", title, html.EscapeString(body)}, nil
 	}
 	return "", nil, fmt.Errorf("no notifications on %s", goos)
 }

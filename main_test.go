@@ -640,6 +640,9 @@ func TestInv_NotificationsAreTheSystems(t *testing.T) {
 	if name, args, err := notifyCommand("linux", found, "-t", "body"); err != nil || name != "notify-send" || strings.Join(args, " ") != "--app-name=heedle -- -t body" {
 		t.Errorf("Linux: %s %q %v", name, args, err)
 	}
+	if _, args, _ := notifyCommand("linux", found, "t", `<a href="https://evil.example.org/">Send</a> & go`); args[len(args)-1] != "&lt;a href=&#34;https://evil.example.org/&#34;&gt;Send&lt;/a&gt; &amp; go" {
+		t.Errorf("Linux markup: %q", args)
+	}
 	if _, _, err := notifyCommand("linux", missing, "t", "b"); err == nil || !strings.Contains(err.Error(), "libnotify-bin") {
 		t.Errorf("Linux without notify-send: %v", err)
 	}
