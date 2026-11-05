@@ -52,6 +52,24 @@ func readImages(b []byte) (images, error) {
 	return im, nil
 }
 
+// refs are the pinned refs, in a fixed order.
+func (im images) refs() []string { return []string{im.Browser, im.Agent, im.BrowserAgent} }
+
+// keptImages are the images this heedle up gave its worker: its flags'
+// (withImages) and the person's own, after --.
+func keptImages(flags, uiArgs []string) []string {
+	var out []string
+	for _, args := range [][]string{flags, uiArgs} {
+		for i := 0; i+1 < len(args); i++ {
+			switch strings.TrimLeft(args[i], "-") {
+			case "browser-image", "agent-image", "browser-agent-image":
+				out = append(out, args[i+1])
+			}
+		}
+	}
+	return out
+}
+
 // pinned are heedle's images. images.json is checked by TestInv_ImagesArePinned.
 var pinned = func() images {
 	im, err := readImages(imagesJSON)

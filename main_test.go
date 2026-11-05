@@ -48,6 +48,20 @@ func TestInv_HeedleIsLoomAndDrawdown(t *testing.T) {
 	if err := run(ctx, nil, io.Discard); err == nil || !strings.Contains(err.Error(), "heedle up") {
 		t.Errorf("no command: %v", err)
 	}
+	// down is heedle's; cancel, containers and images are loom's (HEEDLE-506).
+	help.Reset()
+	if err := run(ctx, []string{"down", "-h"}, &help); !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "-home") {
+		t.Errorf("heedle down -h: %v\n%s", err, help.String())
+	}
+	for _, args := range [][]string{{"cancel"}, {"containers", "-stop", "x", "-clean"}, {"images", "x"}} {
+		err := run(ctx, args, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "loom containers") {
+			t.Errorf("heedle %q isn't loom's: %v", args, err)
+		}
+	}
+	if !strings.Contains(usage, "heedle down") || !strings.Contains(usage, "heedle containers") || !strings.Contains(usage, "heedle images") {
+		t.Error("heedle's usage doesn't name down, containers and images")
+	}
 }
 
 // machine is a fake system: the programs it has, and what it was asked.
@@ -98,9 +112,9 @@ func (m *machine) system() system {
 		},
 		output:   m.output,
 		combined: m.output,
-		temporal: func(_ context.Context, path string, args []string, _ io.Writer, hostPort string) (func() error, error) {
+		temporal: func(_ context.Context, path string, args []string, _ io.Writer, hostPort string) (func() error, int, error) {
 			m.started, m.hostPort = append([]string{path}, args...), hostPort
-			return func() error { m.stopped++; return nil }, nil
+			return func() error { m.stopped++; return nil }, 0, nil
 		},
 		serve: func(_ context.Context, args []string, _ io.Writer) error {
 			if m.started == nil || m.stopped > 0 {
@@ -135,7 +149,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
 		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-browser-image", pinned.Browser, "-browser-agent-image", pinned.BrowserAgent, "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-keep-images", strings.Join(pinned.refs(), ","), "-browser-image", pinned.Browser, "-browser-agent-image", pinned.BrowserAgent, "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
@@ -259,7 +273,7 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 		if err := up(ctx, args, &out, m.system()); err != nil {
 			t.Fatal(err)
 		}
-		return strings.Join(m.served[10:], " "), out.String()
+		return strings.Join(m.served[12:], " "), out.String()
 	}
 	has := map[string]bool{"git": true, "podman": true, "temporal": true}
 
@@ -372,21 +386,21 @@ func TestInv_TemporalNeverOutlivesUp(t *testing.T) {
 	dead, _ := fakeTemporal(t, "echo cannot open database >&2; exit 1")
 	var log bytes.Buffer
 	start := time.Now()
-	if _, err := startTemporal(ctx, dead, nil, &log, address); err == nil || !strings.Contains(err.Error(), "exited") || time.Since(start) > 10*time.Second || !strings.Contains(log.String(), "cannot open database") {
+	if _, _, err := startTemporal(ctx, dead, nil, &log, address); err == nil || !strings.Contains(err.Error(), "exited") || time.Since(start) > 10*time.Second || !strings.Contains(log.String(), "cannot open database") {
 		t.Errorf("a Temporal that exits: %v after %v, logged %q", err, time.Since(start), log.String())
 	}
 
 	slow, pid := fakeTemporal(t, "exec sleep 1000")
 	c, cancel := context.WithCancel(ctx)
 	time.AfterFunc(time.Second, cancel)
-	if _, err := startTemporal(c, slow, nil, io.Discard, address); !errors.Is(err, context.Canceled) || alive(t, pid) {
+	if _, _, err := startTemporal(c, slow, nil, io.Discard, address); !errors.Is(err, context.Canceled) || alive(t, pid) {
 		t.Errorf("stopped while starting: %v, still running: %v", err, alive(t, pid))
 	}
 
 	defer func(d time.Duration) { TemporalReady = d }(TemporalReady)
 	TemporalReady = time.Second
 	slow, pid = fakeTemporal(t, "exec sleep 1000")
-	if _, err := startTemporal(ctx, slow, nil, io.Discard, address); err == nil || !strings.Contains(err.Error(), "didn't answer") || alive(t, pid) {
+	if _, _, err := startTemporal(ctx, slow, nil, io.Discard, address); err == nil || !strings.Contains(err.Error(), "didn't answer") || alive(t, pid) {
 		t.Errorf("a Temporal that never answers: %v, still running: %v", err, alive(t, pid))
 	}
 }

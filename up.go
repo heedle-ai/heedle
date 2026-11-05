@@ -40,13 +40,18 @@ type system struct {
 	// output to log, waits until its frontend at hostPort answers, and
 	// returns a function that stops it. If it can't, nothing is left
 	// running.
-	temporal func(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (stop func() error, err error)
+	temporal func(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (stop func() error, pid int, err error)
 	// serve serves the UI and a worker until ctx ends (drawdown's app.Run).
 	serve func(ctx context.Context, args []string, out io.Writer) error
 	// notify shows one of the operating system's notifications.
 	notify func(ctx context.Context, title, body string) error
 	// notifyEvery is how often heedle looks for something to tell.
 	notifyEvery time.Duration
+	// signal sends a process a signal; signal 0 says whether it's alive.
+	signal func(pid int, sig os.Signal) error
+	// procArgs is a process's command line, its arguments joined by
+	// spaces.
+	procArgs func(ctx context.Context, pid int) (string, error)
 }
 
 func (s system) withDefaults(out io.Writer) system {
@@ -86,6 +91,18 @@ func (s system) withDefaults(out io.Writer) system {
 	}
 	if s.notifyEvery == 0 {
 		s.notifyEvery = 15 * time.Second
+	}
+	if s.signal == nil {
+		s.signal = func(pid int, sig os.Signal) error {
+			p, err := os.FindProcess(pid)
+			if err != nil {
+				return err
+			}
+			return p.Signal(sig)
+		}
+	}
+	if s.procArgs == nil {
+		s.procArgs = func(ctx context.Context, pid int) (string, error) { return readProcArgs(ctx, s, pid) }
 	}
 	return s
 }
@@ -199,6 +216,11 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	if err != nil {
 		return errors.New("heedle needs the Temporal CLI on the PATH (macOS: brew install temporal; Linux: curl -sSf https://temporal.download/cli.sh | sh)")
 	}
+	// A heedle that was killed may have left its Temporal running: stop
+	// that one, and only that one (roadmap 9.2).
+	if err := cleanStart(ctx, *home, sys, out); err != nil {
+		return err
+	}
 	// A Temporal already on these ports would answer for ours, with
 	// another database, and outlive heedle (review 21).
 	hostPort := net.JoinHostPort("127.0.0.1", strconv.Itoa(*port))
@@ -224,13 +246,29 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 		return err
 	}
 	defer logFile.Close()
-	stop, err := sys.temporal(ctx, temporal, []string{"server", "start-dev",
+	targs := []string{"server", "start-dev",
 		"--ip", "127.0.0.1", "--port", strconv.Itoa(*port), "--ui-port", strconv.Itoa(*uiPort),
-		"--namespace", "default", "--db-filename", filepath.Join(*home, "temporal.db"), "--log-level", "warn"}, logFile, hostPort)
+		"--namespace", "default", "--db-filename", filepath.Join(*home, "temporal.db"), "--log-level", "warn"}
+	stop, tpid, err := sys.temporal(ctx, temporal, targs, logFile, hostPort)
 	if err != nil {
 		return fmt.Errorf("starting Temporal (its log: %s): %w", logFile.Name(), err)
 	}
-	defer stop()
+	// What this heedle up started, for heedle down and the next heedle up
+	// (roadmap 9.2); gone once Temporal has stopped.
+	st := upState{PID: os.Getpid(), Args: os.Args, Home: *home, TemporalPort: *port, TemporalUIPort: *uiPort, UI: "http://" + *listen,
+		Keep: keptImages(images, uiArgs), Started: time.Now().UTC()}
+	st.Temporal.PID, st.Temporal.Args = tpid, append([]string{temporal}, targs...)
+	if err := writeUpState(*home, st); err != nil {
+		stop()
+		return err
+	}
+	defer func() {
+		stop()
+		os.Remove(filepath.Join(*home, upFile))
+	}()
+	if podman != "" {
+		sweep(ctx, hostPort, out)
+	}
 	fmt.Fprintf(out, "Temporal on %s (Web UI http://%s, log %s)\n", hostPort, temporalUI, logFile.Name())
 	if *notify {
 		go watch(ctx, sys, hostPort, queueOf(uiArgs), "http://"+*listen, out)
@@ -238,7 +276,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	// The connectors file lives in the home too (a -connectors after --
 	// wins); it needn't exist until there is a connector.
 	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
-		"-connectors", filepath.Join(*home, "connectors.json")}, append(images, uiArgs...)...), out)
+		"-connectors", filepath.Join(*home, "connectors.json"), "-keep-images", strings.Join(pinned.refs(), ",")}, append(images, uiArgs...)...), out)
 }
 
 // ownFlags are drawdown's flags heedle up sets; passing them after --
@@ -252,7 +290,7 @@ var TemporalReady = time.Minute
 // answers a health check. It stops it with an interrupt (then a kill
 // after WaitDelay) when stopped, and if it exits, ctx ends or it doesn't
 // answer in time, it reports why and leaves nothing running.
-func startTemporal(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (func() error, error) {
+func startTemporal(ctx context.Context, path string, args []string, log io.Writer, hostPort string) (func() error, int, error) {
 	run, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(run, path, args...)
 	cmd.Stdout, cmd.Stderr = log, log
@@ -260,7 +298,7 @@ func startTemporal(ctx context.Context, path string, args []string, log io.Write
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, err
+		return nil, 0, err
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
@@ -278,18 +316,18 @@ func startTemporal(ctx context.Context, path string, args []string, log io.Write
 		c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quiet{}, ConnectionOptions: client.ConnectionOptions{GetSystemInfoTimeout: time.Second}})
 		if err == nil {
 			c.Close()
-			return stop, nil
+			return stop, cmd.Process.Pid, nil
 		}
 		select {
 		case err := <-exited:
 			cancel()
-			return nil, fmt.Errorf("it exited: %v", err)
+			return nil, 0, fmt.Errorf("it exited: %v", err)
 		case <-ctx.Done():
 			stop()
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		case <-deadline:
 			stop()
-			return nil, fmt.Errorf("it didn't answer on %s within %v", hostPort, TemporalReady)
+			return nil, 0, fmt.Errorf("it didn't answer on %s within %v", hostPort, TemporalReady)
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

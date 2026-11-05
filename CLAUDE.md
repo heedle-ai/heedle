@@ -51,9 +51,14 @@ why the existing tool can't do it.
 
 ## Repo-specific
 
-- **heedle adds nothing but `up`.** Every other command is `loom/cli.Run`
-  or `drawdown/app.Run`, unchanged; change behaviour there, not here
+- **heedle adds nothing but `up` and `down`** (and, to loom's `images`,
+  the images its release pins). Every other command is `loom/cli.Run` or
+  `drawdown/app.Run`, unchanged; change behaviour there, not here
   (`TestInv_HeedleIsLoomAndDrawdown`).
+- **heedle stops only what's its own:** a process only if it still runs
+  exactly the command line `up.json` records (Temporal only with this
+  home's database), and containers and images only through loom and
+  bobbin, which touch nothing without heedle's labels or name.
 - **`heedle up` uses the real tools:** the `temporal` CLI's dev server
   (run directly, so heedle can see it exit and stop it), and `podman
   machine` on macOS. It never reimplements or patches them.

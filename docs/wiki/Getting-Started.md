@@ -45,7 +45,23 @@ It prints where everything is: Temporal's address and Web UI, Temporal's log, an
 (pipe (par (echo "a") (echo "b")) echo)
 ```
 
-Press Ctrl-C to stop the UI, the worker and Temporal. Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere.
+Press Ctrl-C to stop the UI, the worker and Temporal, or, from another terminal:
+
+```sh
+./heedle down
+```
+
+Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down`. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
+
+To see what heedle is running, and tidy up:
+
+```sh
+./heedle containers
+./heedle images
+./heedle images -prune
+```
+
+`containers` lists heedle's containers with their runs. `-stop WORKFLOW` stops a run through Temporal, and `-clean` removes the containers of runs that have ended. `images -prune` removes images that old releases left behind. The UI's **System** page shows the same.
 
 To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, put them after `--`. For example, to record runs on another history:
 

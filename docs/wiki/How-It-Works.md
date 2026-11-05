@@ -1,10 +1,12 @@
 # How It Works
 
-heedle is three existing programs in one binary, plus `heedle up`:
+heedle is three existing programs in one binary, plus `heedle up` and `heedle down`:
 
 | Command | What runs |
 |---|---|
 | `heedle up` | Temporal's dev server, then a loom worker and the drawdown UI (below) |
+| `heedle down` | stops what `heedle up` started, and heedle's containers ([below](#heedle-down-and-a-clean-start)) |
+| `heedle images` | loom's `images`, keeping the images this release pins and those `heedle up` gave its worker |
 | `heedle ui -store DIR ...` | drawdown with its own flags (`drawdown/app.Run`) |
 | `heedle COMMAND ...` | any loom command, unchanged (`loom/cli.Run`) |
 | `heedle version` | the version GoReleaser stamped in, or `dev` |
@@ -23,7 +25,27 @@ In order:
 4. **Temporal.** heedle runs `temporal server start-dev` and waits until it answers a health check, for up to a minute. If it exits first, heedle says so at once and points to its log. If it doesn't answer in time, or heedle is stopped meanwhile, heedle stops it, so nothing is left running (`TestInv_TemporalNeverOutlivesUp`). The frontend is on `127.0.0.1:7233` and the Web UI on `127.0.0.1:8233` (`-temporal-port`, `-temporal-ui-port`). Its database is `~/.heedle/temporal.db`, so history survives a restart. Its log is `~/.heedle/temporal.log`.
 5. **The worker and the UI.** drawdown runs with the store `~/.heedle/store.git`, Temporal's address and its Web UI, on `127.0.0.1:8090` (`-listen`). It runs a loom worker in the same process, as drawdown always does. Its connectors file is `~/.heedle/connectors.json`, which needn't exist. Flags after `--` go to drawdown, such as `-agent-image`, or `-connectors` for another file.
 
-Ctrl-C lets requests in flight finish, stops the UI and the worker, then interrupts Temporal and waits for it to exit. A second Ctrl-C ends heedle at once. heedle stops Temporal however the UI ends, even when it fails (`TestInv_UpStartsTemporalThenTheUI`).
+`heedle up` also gives the worker the images its release pins (`-keep-images`), so the System page never removes them. Ctrl-C lets requests in flight finish, stops the UI and the worker, then interrupts Temporal and waits for it to exit. A second Ctrl-C ends heedle at once. heedle stops Temporal however the UI ends, even when it fails (`TestInv_UpStartsTemporalThenTheUI`).
+
+## heedle down, and a clean start
+
+`heedle up` records what it started in `~/.heedle/up.json` (roadmap 9.2). The file holds its own process ID and command line, Temporal's process ID and command line (with this home's database), the ports, the UI's address, and the images it gave the worker. heedle removes the file once Temporal has stopped. heedle stops a process only if it is still exactly the one `up.json` records: the same process ID, running the same command line, and for Temporal, this home's database. Anything else on the port, or now under that process ID, is left alone.
+
+```sh
+./heedle down
+```
+
+`heedle down` interrupts that `heedle up`, which stops its UI, its worker and Temporal as Ctrl-C does. If Temporal outlived it, `heedle down` stops Temporal too, killing it if it won't stop. Then it removes heedle's containers: every container on this machine labelled `heedle.kind`, a separate `loom worker`'s included, and nothing else. It says what it stopped, or that nothing of heedle's was running.
+
+`heedle up` starts by reading `up.json`:
+
+- If that heedle is still running, it says so and stops: `heedle is already running at http://127.0.0.1:8090; heedle down stops it`.
+- If heedle was killed (`kill -9`, a crash) and left its Temporal running, it stops that Temporal, says `Stopped the Temporal a previous heedle up left running (pid N).`, and goes on.
+- Anything else on Temporal's ports still fails, as before.
+
+Once Temporal answers, it removes the containers of runs that have ended (loom's `Clean`), left behind by a heedle that was killed.
+
+`heedle containers` lists heedle's containers with the run each belongs to and its status, step, age, image, CPU and memory. `heedle containers -stop WORKFLOW` stops a run through Temporal, so its steps end and Podman removes their containers, and `-clean` removes the containers of runs that have ended ([loom → Housekeeping](https://github.com/heedle-ai/loom/wiki/How-It-Works#housekeeping-containers-images-and-stopping-a-run)). `heedle images` lists heedle's images. `heedle images -prune` removes the old ones: images under `ghcr.io/heedle-ai/` that this release doesn't pin, that `heedle up` didn't give its worker, and that no container uses. Your own images, and your own names on heedle's, are never touched. The UI's **System** page shows and does the same ([drawdown → The System page](https://github.com/heedle-ai/drawdown/wiki/How-It-Works#the-system-page)).
 
 ## Act steps, end to end
 
