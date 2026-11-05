@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="400" viewBox="0 0 680 400" role="img"><title>Two heedle homes at once as a string diagram</title><desc>Two heedle up runs side by side, one from home A and one from home B. Each starts its own Temporal dev server with its own database, then its own loom worker on its own store, then its steps' containers, each labelled with its home: the first 12 hex digits of the SHA-256 of the home's store path. heedle down for home A stops A's Temporal and worker and removes only containers labelled with A's home; B's keep running. A container with no home label, from before roadmap 9.2.1, is removed only when no other home's heedle runs.</desc><style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+.w{stroke:#5F5E5A;stroke-width:1.5;fill:none}.dot{fill:#5F5E5A}
+.d{stroke:#888780;stroke-width:0.8;fill:none;stroke-dasharray:5 4}
+.l{font-size:12px;fill:#5F5E5A}.f{font-size:13px;fill:#444441}
+.t1{font-size:14px;font-weight:600}.t2{font-size:12px}
+.p rect{fill:#EEEDFE;stroke:#534AB7}.p .t1{fill:#3C3489}.p .t2{fill:#534AB7}
+.g rect{fill:#E1F5EE;stroke:#0F6E56}.g .t1{fill:#085041}.g .t2{fill:#0F6E56}
+.c rect{fill:#FAECE7;stroke:#993C1D}.c .t1{fill:#712B13}.c .t2{fill:#993C1D}
+.n rect{fill:#F1EFE8;stroke:#5F5E5A}.n .t1{fill:#444441}.n .t2{fill:#5F5E5A}
+@media (prefers-color-scheme:dark){
+.w{stroke:#B4B2A9}.dot{fill:#B4B2A9}.d{stroke:#888780}.l{fill:#B4B2A9}.f{fill:#D3D1C7}
+.p rect{fill:#3C3489;stroke:#AFA9EC}.p .t1{fill:#EEEDFE}.p .t2{fill:#CECBF6}
+.g rect{fill:#085041;stroke:#5DCAA5}.g .t1{fill:#E1F5EE}.g .t2{fill:#9FE1CB}
+.c rect{fill:#712B13;stroke:#F0997B}.c .t1{fill:#FAECE7}.c .t2{fill:#F5C4B3}
+.n rect{fill:#444441;stroke:#B4B2A9}.n .t1{fill:#F1EFE8}.n .t2{fill:#D3D1C7}}
+</style><defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect class="d" x="14" y="60" width="312" height="300" rx="12"/><text class="l" x="18" y="378" text-anchor="start">heedle down -home A touches only this</text>
+<path class="w" d="M170 20 L170 90"/><text class="l" x="180" y="40" text-anchor="start">A/</text>
+<g class="c"><rect x="50" y="90" width="240" height="48" rx="6"/><text class="t1" x="170" y="111" text-anchor="middle">Temporal dev server</text><text class="t2" x="170" y="128" text-anchor="middle">port 7233; A/temporal.db</text></g>
+<path class="w" d="M170 138 L170 170"/><text class="f" x="180" y="160" text-anchor="start">;</text>
+<g class="g"><rect x="50" y="170" width="240" height="48" rx="6"/><text class="t1" x="170" y="191" text-anchor="middle">loom worker</text><text class="t2" x="170" y="208" text-anchor="middle">A/store.git</text></g>
+<path class="w" d="M170 218 L170 250"/><text class="f" x="180" y="240" text-anchor="start">;</text>
+<g class="n"><rect x="50" y="250" width="240" height="48" rx="6"/><text class="t1" x="170" y="271" text-anchor="middle">its steps' containers</text><text class="t2" x="170" y="288" text-anchor="middle">heedle.home=hash(A)</text></g>
+<path class="w" d="M170 298 L170 330"/>
+<text class="f" x="340" y="200" text-anchor="middle">⊗</text>
+<path class="w" d="M510 20 L510 90"/><text class="l" x="520" y="40" text-anchor="start">B/</text>
+<g class="c"><rect x="390" y="90" width="240" height="48" rx="6"/><text class="t1" x="510" y="111" text-anchor="middle">Temporal dev server</text><text class="t2" x="510" y="128" text-anchor="middle">port 7243; B/temporal.db</text></g>
+<path class="w" d="M510 138 L510 170"/><text class="f" x="520" y="160" text-anchor="start">;</text>
+<g class="g"><rect x="390" y="170" width="240" height="48" rx="6"/><text class="t1" x="510" y="191" text-anchor="middle">loom worker</text><text class="t2" x="510" y="208" text-anchor="middle">B/store.git</text></g>
+<path class="w" d="M510 218 L510 250"/><text class="f" x="520" y="240" text-anchor="start">;</text>
+<g class="n"><rect x="390" y="250" width="240" height="48" rx="6"/><text class="t1" x="510" y="271" text-anchor="middle">its steps' containers</text><text class="t2" x="510" y="288" text-anchor="middle">heedle.home=hash(B)</text></g>
+<path class="w" d="M510 298 L510 330"/>
+</svg>

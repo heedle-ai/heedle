@@ -99,6 +99,7 @@ jobs:
           if grep -q -- '--- SKIP' e2e.log; then echo 'a test skipped'; exit 1; fi
           grep -q -- '--- PASS: TestE2E_Up' e2e.log
           grep -q -- '--- PASS: TestE2E_KillThenUpThenDown' e2e.log
+          grep -q -- '--- PASS: TestE2E_WrapperTemporalStops' e2e.log
       - name: images-pinned
         # images.json pins each image to content; never a tag (roadmap 9.1),
         # the browser-agent image too (roadmap 9.5).
@@ -129,6 +130,21 @@ jobs:
           go test -count=1 -v -run 'TestE2EImages_Browse' . | tee e2e-images.log
           if grep -q -- '--- SKIP' e2e-images.log; then echo 'a test skipped'; exit 1; fi
           grep -q -- '--- PASS: TestE2EImages_Browse' e2e-images.log
+      - name: e2e-homes
+        # Two homes at once, for real (roadmap 9.2.1): each with its own
+        # Temporal and a container step, in a Podman store of the test's
+        # own; heedle down for one leaves the other's containers, Temporal
+        # and UI, and a prune keeps the other's pins. Linux only, after
+        # e2e-images, which set up Podman.
+        if: runner.os == 'Linux'
+        working-directory: heedle
+        env:
+          HEEDLE_E2E_HOMES: "1"
+        run: |
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          go test -count=1 -v -run 'TestE2EHomes_TwoAtOnce' . | tee e2e-homes.log
+          if grep -q -- '--- SKIP' e2e-homes.log; then echo 'a test skipped'; exit 1; fi
+          grep -q -- '--- PASS: TestE2EHomes_TwoAtOnce' e2e-homes.log
       - name: e2e-act
         # An act step fills in a two-page form served by the test, in the
         # pinned browser-agent image, with a stand-in Claude; the form gets

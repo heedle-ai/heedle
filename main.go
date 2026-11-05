@@ -18,8 +18,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -35,9 +38,10 @@ const usage = `usage:
                        start Temporal, a worker and the UI (open the URL it prints)
   heedle down [-home DIR]
                        stop what heedle up started, and heedle's containers
-  heedle containers [-stop WORKFLOW | -clean]
-                       heedle's containers and their runs; stop a run, or
-                       remove the containers of runs that have ended
+  heedle containers [-home DIR] [-stop WORKFLOW [-run RUN] | -clean]
+                       heedle's containers, their homes and runs; stop a
+                       run, or remove this home's containers of runs that
+                       have ended
   heedle images [-home DIR] [-prune]
                        heedle's images; remove the ones this release
                        doesn't pin and no container uses
@@ -79,12 +83,21 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return down(ctx, args[1:], out, system{})
 	case "images":
 		// loom's images, keeping this release's pins and what heedle up
-		// gave its worker.
+		// gave its worker, and every running home's (roadmap 9.2.1).
 		home, rest, err := homeArg(args[1:])
 		if err != nil {
 			return err
 		}
-		return cli.Run(ctx, append(append([]string{"images"}, keepArgs(home)...), rest...), out)
+		return cli.Run(ctx, append(append([]string{"images"}, keepArgs(ctx, system{}.withDefaults(out), home)...), rest...), out)
+	case "containers":
+		// loom's containers, for this home: its store, so -clean removes
+		// only this home's containers and the listing marks them, and its
+		// Temporal (roadmap 9.2.1).
+		home, rest, err := homeArg(args[1:])
+		if err != nil {
+			return err
+		}
+		return cli.Run(ctx, append(append([]string{"containers"}, homeArgs(home, rest)...), rest...), out)
 	case "ui":
 		return app.Run(ctx, args[1:], out)
 	case "version", "-version", "--version":
@@ -97,9 +110,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	return cli.Run(ctx, args, out)
 }
 
-// homeArg takes heedle images' -home (the home heedle up was started
-// with; the default if none) out of its arguments, leaving loom's
-// (HEEDLE-507).
+// homeArg takes heedle images' and containers' -home (the home heedle up
+// was started with; the default if none) out of its arguments, leaving
+// loom's (HEEDLE-507), as an absolute path.
 func homeArg(args []string) (string, []string, error) {
 	home, rest := defaultHome(), []string{}
 	for i := 0; i < len(args); i++ {
@@ -121,20 +134,43 @@ func homeArg(args []string) (string, []string, error) {
 		}
 		home = value
 	}
-	return home, rest, nil
+	return absHome(home), rest, nil
 }
 
 // keepArgs are -keep flags for the images heedle images never prunes:
-// this release's pins, and the images the running heedle up (home's
-// up.json) gave its worker.
-func keepArgs(home string) []string {
+// this release's pins, the images the running heedle up (home's up.json)
+// gave its worker, and those of every other home whose heedle up runs
+// now, its release's pins included (roadmap 9.2.1): so a prune for one
+// home never removes an image another running home pinned.
+func keepArgs(ctx context.Context, sys system, home string) []string {
 	refs := pinned.refs()
-	if st, err := readUpState(home); err == nil && st != nil {
-		refs = append(refs, st.Keep...)
+	for _, h := range append([]string{home}, otherHomes(ctx, sys, home)...) {
+		if st, err := readUpState(h); err == nil && st != nil {
+			refs = append(refs, st.Pins...)
+			refs = append(refs, st.Keep...)
+		}
 	}
 	var out []string
+	seen := map[string]bool{}
 	for _, r := range refs {
-		out = append(out, "-keep", r)
+		if r != "" && !seen[r] {
+			seen[r] = true
+			out = append(out, "-keep", r)
+		}
+	}
+	return out
+}
+
+// homeArgs are the flags heedle containers gives loom's for home, unless
+// given: its store (-store), and the Temporal its running heedle up
+// started (-address, from up.json).
+func homeArgs(home string, rest []string) []string {
+	var out []string
+	if !hasFlag(rest, "store") {
+		out = append(out, "-store", filepath.Join(home, "store.git"))
+	}
+	if st, err := readUpState(home); err == nil && st != nil && st.TemporalPort > 0 && !hasFlag(rest, "address") {
+		out = append(out, "-address", net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)))
 	}
 	return out
 }

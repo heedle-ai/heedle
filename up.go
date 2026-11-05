@@ -22,6 +22,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/log"
 
+	"github.com/heedle-ai/bobbin"
 	"github.com/heedle-ai/drawdown/app"
 	"github.com/heedle-ai/loom"
 )
@@ -56,6 +57,8 @@ type system struct {
 	// podmanRetry is how long heedle up waits between asking Podman
 	// whether it answers.
 	podmanRetry time.Duration
+	// listener is the process listening on 127.0.0.1:port (lsof).
+	listener func(ctx context.Context, port int) (int, error)
 }
 
 func (s system) withDefaults(out io.Writer) system {
@@ -110,6 +113,9 @@ func (s system) withDefaults(out io.Writer) system {
 	}
 	if s.procArgs == nil {
 		s.procArgs = func(ctx context.Context, pid int) (string, error) { return readProcArgs(ctx, s, pid) }
+	}
+	if s.listener == nil {
+		s.listener = func(ctx context.Context, port int) (int, error) { return listening(ctx, s, port) }
 	}
 	return s
 }
@@ -216,6 +222,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	if *home == "" {
 		return errors.New("no home directory: give -home DIR")
 	}
+	*home = absHome(*home)
 	if err := os.MkdirAll(*home, 0o700); err != nil {
 		return err
 	}
@@ -265,8 +272,9 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	}
 	// What this heedle up started, for heedle down and the next heedle up
 	// (roadmap 9.2); gone once Temporal has stopped.
+	store := filepath.Join(*home, "store.git")
 	st := upState{PID: os.Getpid(), Args: os.Args, Home: *home, TemporalPort: *port, TemporalUIPort: *uiPort, UI: "http://" + *listen,
-		Keep: keptImages(images, uiArgs), Started: time.Now().UTC()}
+		Keep: keptImages(images, uiArgs), Started: time.Now().UTC(), HomeLabel: bobbin.HomeOf(store), Pins: pinned.refs()}
 	st.Temporal.PID, st.Temporal.Args = tpid, append([]string{temporal}, targs...)
 	// The command line the system reports for it, which is what heedle
 	// down and the next heedle up match: a temporal on the PATH that is a
@@ -274,16 +282,41 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	if line, err := sys.procArgs(ctx, tpid); err == nil && line != "" {
 		st.Temporal.Cmdline = line
 	}
+	// The process that answers on the port, when it isn't the one heedle
+	// started: a wrapper's child, which stopping the wrapper leaves
+	// running (roadmap 9.2.1).
+	if lpid, err := sys.listener(ctx, *port); err == nil && lpid != tpid {
+		if line, err := sys.procArgs(ctx, lpid); err == nil && line != "" {
+			st.Temporal.Listener = &process{PID: lpid, Cmdline: line}
+		}
+	}
 	if err := writeUpState(*home, st); err != nil {
 		stop()
 		return err
 	}
+	unregister, err := registerHome(*home, st.HomeLabel)
+	if err != nil {
+		fmt.Fprintf(out, "Couldn't say this home runs (%v): heedle down and heedle images for another home won't know.\n", err)
+		unregister = func() {}
+	}
 	defer func() {
+		// A wrapper's child first: the wrapper then ends as it does.
+		if ourListener(context.Background(), sys, &st, *home) {
+			l := st.Temporal.Listener
+			stopProcess(context.Background(), sys, l.PID, l.Cmdline, 15*time.Second, true)
+		}
 		stop()
+		unregister()
+		if answers(hostPort) {
+			// Never leave without saying Temporal outlived heedle; up.json
+			// stays, so heedle down can say so too.
+			fmt.Fprintf(out, "Temporal still answers on %s after heedle stopped it; stop it yourself (heedle down -home %s says which process)\n", hostPort, *home)
+			return
+		}
 		os.Remove(filepath.Join(*home, upFile))
 	}()
 	if podman != "" {
-		sweep(ctx, hostPort, out)
+		sweep(ctx, hostPort, st.HomeLabel, out)
 	}
 	fmt.Fprintf(out, "Temporal on %s (Web UI http://%s, log %s)\n", hostPort, temporalUI, logFile.Name())
 	if *notify {
@@ -291,7 +324,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	}
 	// The connectors file lives in the home too (a -connectors after --
 	// wins); it needn't exist until there is a connector.
-	return sys.serve(ctx, append([]string{"-store", filepath.Join(*home, "store.git"), "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
+	return sys.serve(ctx, append([]string{"-store", store, "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
 		"-connectors", filepath.Join(*home, "connectors.json"), "-keep-images", strings.Join(pinned.refs(), ",")}, append(images, uiArgs...)...), out)
 }
 
