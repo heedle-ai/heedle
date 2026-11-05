@@ -179,7 +179,7 @@ func TestEval_Course(t *testing.T) {
 		// replays, without Claude, from the first run's script.
 		if err == nil && got.Done && !c.forms[name].Refuse {
 			again, err := tryActIn(t, act, c.program(name), store)
-			if err == nil && again.Replay != nil && !again.Replay.HandedOver && again.Replay.Replayed > 0 && again.InputTokens+again.OutputTokens == 0 {
+			if err == nil && wholeReplay(again) {
 				s.Replayed++
 			}
 			t.Logf("%s again: replay %+v, %v", name, again.Replay, err)
@@ -197,5 +197,33 @@ func TestEval_Course(t *testing.T) {
 	t.Logf("%s", s.row())
 	if s.Decoy != 0 {
 		t.Errorf("the decoy received %d requests", s.Decoy)
+	}
+}
+
+// wholeReplay says whether an act step replayed its whole script, Claude
+// never asked: what the scores page counts as replayed.
+func wholeReplay(rec pirn.ActResult) bool {
+	r := rec.Replay
+	return r != nil && !r.HandedOver && r.Replayed > 0 && r.Replayed == r.Steps && rec.InputTokens+rec.OutputTokens == 0
+}
+
+// TestInv_EvalCountsWholeReplays: the scores page counts a form as
+// replayed only when the whole script was, without Claude: not one a
+// person's "no" cut short, nor one handed over (review 51 round 2).
+func TestInv_EvalCountsWholeReplays(t *testing.T) {
+	for _, c := range []struct {
+		r    *pirn.ActReplay
+		in   int64
+		want bool
+	}{
+		{&pirn.ActReplay{Steps: 4, Replayed: 4}, 0, true},
+		{&pirn.ActReplay{Steps: 4, Replayed: 2, At: 3}, 0, false},
+		{&pirn.ActReplay{Steps: 4, Replayed: 1, HandedOver: true, At: 2}, 50, false},
+		{&pirn.ActReplay{Steps: 4, Replayed: 4}, 5, false},
+		{nil, 0, false},
+	} {
+		if got := wholeReplay(pirn.ActResult{Answer: pirn.Answer{InputTokens: c.in}, Replay: c.r}); got != c.want {
+			t.Errorf("%+v: %v", c.r, got)
+		}
 	}
 }

@@ -462,7 +462,13 @@ func TestE2ECourse_StandIn(t *testing.T) {
 	// Roadmap 9.9: the second time round, every form that went through
 	// replayed without Claude; the one to refuse asked Claude again.
 	t.Logf("course, second run: %d of %d forms replayed without Claude", replayed, len(c.forms))
-	if want := len(c.forms) - 1; replayed != want {
+	refuse := 0
+	for _, f := range c.forms {
+		if f.Refuse {
+			refuse++
+		}
+	}
+	if want := len(c.forms) - refuse; replayed != want { // review 51: not "one refuses"
 		t.Errorf("%d forms replayed the second time, want %d", replayed, want)
 	}
 	// Review 40: a password asked for through a label, inside a shadow
@@ -765,9 +771,11 @@ func runProfiled(t *testing.T, act pirn.Act, program string, store *warp.Store, 
 // that changed (roadmap 9.9): the contact form, filled once by a stand-in
 // Claude, is renamed on the site ("Email" becomes "Email address") before
 // the same program runs again. The replay opens the page as recorded,
-// sees the page differ at the action that fills the renamed field, and
-// hands the rest to Claude there, saying so in the record; Claude fills
-// the renamed form, the person is asked, and the form arrives.
+// sees the page differ before its first action on the changed page (here
+// the one that fills the renamed field, as the form is filled in one go),
+// and hands the rest to Claude there, the record naming the element
+// that's gone; Claude fills the renamed form, the person is asked, and
+// the form arrives.
 func TestE2EReplay_RenamedFieldHandsOver(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
@@ -807,5 +815,49 @@ func TestE2EReplay_RenamedFieldHandsOver(t *testing.T) {
 	}
 	if !rec.Calls[0].Replayed || rec.Calls[1].Replayed {
 		t.Errorf("calls: %+v", rec.Calls)
+	}
+}
+
+// TestE2EReplay_CardFrameStops is ci:e2e-course's run of a form whose
+// site later embeds a card field in a frame from another origin (review
+// 51): the replay opens the page as recorded, sees the card field in
+// Playwright's snapshot (the browser's own check can't see into another
+// origin's frame), and never acts on the page: it hands over, saying the
+// page asks for a card.
+func TestE2EReplay_CardFrameStops(t *testing.T) {
+	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
+		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
+	}
+	img := browserAgentImage(t)
+	store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
+	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
+	program := fmt.Sprintf("(act %q %q %q)", "Send the contact form for Ada Lovelace, ada@example.org, asking to be called back.", "http://forms-srv:8080/contact/", "other-srv")
+	asked := 0
+	first := startCourse(t)
+	act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: scripted(t, open(t, "contact"), snapshot(t),
+		fill(t, tb("Full name", "Ada Lovelace"), tb("Email", "ada@example.org"), tb("Phone", "020 7946 0018"), tb("Message", "Please call me back.")),
+		confirm("Ada Lovelace."), click(t, `button "Send"`), say("Sent.\nResult: finished")).URL},
+		Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: first.network}}, Image: img, Confirm: yes(&asked)}
+	if rec := runActIn(t, act, program, store); !first.check("contact").Done || len(rec.Script) != 4 {
+		t.Fatalf("the first run: %+v", rec)
+	}
+	carded := startCourseEdited(t, func(dir string) {
+		if err := os.WriteFile(filepath.Join(dir, "forms", "password", "card.html"), []byte(`<!doctype html><meta charset="utf-8"><label>Card number <input name="cc"></label>`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "forms", "contact", "index.html")
+		b, err := os.ReadFile(p)
+		if err != nil || !strings.Contains(string(b), "</form>") {
+			t.Fatalf("the contact form changed: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Replace(string(b), "</form>", `</form><iframe src="http://other-srv:8080/password/card.html" title="Pay"></iframe>`, 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	act.Browser = pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: carded.network}}
+	act.Claude.BaseURL = scripted(t, say("The page asks for a card.\nResult: stopped")).URL
+	rec := runActIn(t, act, program, store)
+	if rp := rec.Replay; rp == nil || rp.Replayed != 1 || rp.At != 2 || !strings.Contains(rp.Why, "card") || len(carded.check("contact").Received) != 0 {
+		t.Errorf("replay %+v, received %v", rec.Replay, carded.check("contact").Received)
 	}
 }
