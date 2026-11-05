@@ -58,6 +58,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	homesDir = func() string { return dir }
+	// No test reaches the machine's own Podman, whose containers may be
+	// anyone's, unless it is a Podman end-to-end test, which asks for it:
+	// a podman that refuses goes first on the PATH (HEEDLE-530, review 55:
+	// a test's heedle down removed other sessions' containers).
+	if os.Getenv("HEEDLE_E2E_IMAGES") == "" && os.Getenv("HEEDLE_E2E_ACT") == "" && os.Getenv("HEEDLE_E2E_HOMES") == "" {
+		guard := filepath.Join(dir, "guard")
+		os.MkdirAll(guard, 0o700)
+		os.WriteFile(filepath.Join(guard, "podman"), []byte("#!/bin/sh\necho \"heedle tests never use the machine's podman\" >&2\nexit 125\n"), 0o755)
+		os.Setenv("PATH", guard+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -460,7 +470,7 @@ func TestE2E_KillThenUpThenDown(t *testing.T) {
 	args := []string{"up", "-home", home, "-listen", listen, "-notify=false", "-temporal-port", fmt.Sprint(port), "-temporal-ui-port", fmt.Sprint(uiPort)}
 	// heedle says which homes run in ~/.heedle/homes: a HOME of the
 	// test's own, never the person's.
-	env := append(os.Environ(), "HOME="+t.TempDir())
+	env := append(os.Environ(), "HOME="+t.TempDir(), "PATH="+noContainers(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	start := func() (*exec.Cmd, *syncBuffer) {
 		var out syncBuffer
 		cmd := exec.Command(bin, args...)
