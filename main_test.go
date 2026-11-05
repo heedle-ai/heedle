@@ -228,6 +228,9 @@ func TestInv_ImagesArePinned(t *testing.T) {
 		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "extra": "z"}`,
 		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"} {}`,
 		`{"browser": "-x@sha256:` + d + `", "agent": "y@sha256:` + d + `"}`,
+		// Roadmap 9.5: a browser-agent image is pinned like the others.
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "browserAgent": "ghcr.io/heedle-ai/reed-browser-agent:latest"}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "browserAgent": "z@sha256:abc"}`,
 	} {
 		if _, err := readImages([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
@@ -296,6 +299,35 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 	m = &machine{goos: "linux", has: map[string]bool{"git": true, "temporal": true}}
 	if served, _ := start(m); served != "" || len(m.calls) != 0 {
 		t.Errorf("without Podman: served %q, ran %q", served, m.calls)
+	}
+}
+
+// TestInv_UpGivesTheBrowserAgentImage: with a browser-agent image pinned,
+// heedle up pulls it once if Podman doesn't have it and gives it to the
+// worker as -browser-agent-image, for act steps; one given after -- is the
+// person's; with none pinned, no flag is given and nothing is pulled for
+// it. (Roadmap 9.5.)
+func TestInv_UpGivesTheBrowserAgentImage(t *testing.T) {
+	d := strings.Repeat("c", 64)
+	im := images{Browser: "ghcr.io/heedle-ai/reed-browser@sha256:" + d, Agent: "ghcr.io/heedle-ai/pirn-agent@sha256:" + d,
+		BrowserAgent: "ghcr.io/heedle-ai/reed-browser-agent@sha256:" + d}
+	has := map[string]bool{"git": true, "podman": true, "temporal": true}
+	m := &machine{goos: "linux", has: has, missing: map[string]bool{im.BrowserAgent: true}}
+	var out bytes.Buffer
+	flags := strings.Join(withImages(ctx, m.system(), "podman", nil, im, &out), " ")
+	if !strings.Contains(flags, "-browser-agent-image "+im.BrowserAgent) || !strings.Contains(flags, "-browser-image "+im.Browser) ||
+		!strings.Contains(strings.Join(m.calls, "|"), "podman pull --quiet "+im.BrowserAgent) || !strings.Contains(out.String(), "browser-agent image (for act steps") {
+		t.Errorf("flags %q, ran %q, said %q", flags, m.calls, out.String())
+	}
+	m = &machine{goos: "linux", has: has, missing: map[string]bool{im.BrowserAgent: true}}
+	if flags := strings.Join(withImages(ctx, m.system(), "podman", []string{"-browser-agent-image", "mine"}, im, io.Discard), " "); strings.Contains(flags, im.BrowserAgent) ||
+		strings.Contains(strings.Join(m.calls, "|"), im.BrowserAgent) {
+		t.Errorf("the person's own: flags %q, ran %q", flags, m.calls)
+	}
+	im.BrowserAgent = ""
+	m = &machine{goos: "linux", has: has}
+	if flags := strings.Join(withImages(ctx, m.system(), "podman", nil, im, io.Discard), " "); strings.Contains(flags, "browser-agent") || len(m.calls) != 2 {
+		t.Errorf("none pinned: flags %q, ran %q", flags, m.calls)
 	}
 }
 
