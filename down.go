@@ -239,14 +239,14 @@ func devServerOf(line, home string) bool {
 	return strings.Contains(line+" ", " start-dev ") && homeDB(dbArg(line), home)
 }
 
-// dbArg is the --db-filename argument of line: up to the next flag, so a
-// path with spaces is read whole; "" without one.
+// dbArg is the --db-filename argument of line: up to the next flag (" -"),
+// so a path with spaces is read whole; "" without one.
 func dbArg(line string) string {
 	_, rest, ok := strings.Cut(line+" ", " --db-filename ")
 	if !ok {
 		return ""
 	}
-	db, _, _ := strings.Cut(rest, " --")
+	db, _, _ := strings.Cut(rest, " -")
 	return strings.TrimSpace(db)
 }
 
@@ -271,12 +271,17 @@ func errStillAnswers(ctx context.Context, sys system, port int) error {
 // when lsof can say which process that is and it is a dev server with
 // another database than home's: another home's Temporal, now on the port
 // a stale up.json records (review 55).
-func othersTemporal(ctx context.Context, sys system, port int, home string) (string, bool) {
+func othersTemporal(ctx context.Context, sys system, st *upState, home string) (string, bool) {
+	port := st.TemporalPort
 	pid, err := sys.listener(ctx, port)
 	if err != nil {
 		return "", false
 	}
 	line, err := sys.procArgs(ctx, pid)
+	// A process up.json records is never another home's (review 55).
+	if err == nil && (pid == st.Temporal.PID && line == st.temporalLine() || st.Temporal.Listener != nil && pid == st.Temporal.Listener.PID && line == st.Temporal.Listener.Cmdline) {
+		return "", false
+	}
 	db := dbArg(line)
 	if err != nil || devServerOf(line, home) || !strings.Contains(line+" ", " start-dev ") || !filepath.IsAbs(db) {
 		return "", false
@@ -378,7 +383,7 @@ func cleanStart(ctx context.Context, home string, sys system, out io.Writer) err
 	// up.json goes only once nothing answers on its Temporal's port: one
 	// heedle couldn't recognise is said, and up.json kept (review 55).
 	if st.portAnswers() {
-		db, ok := othersTemporal(ctx, sys, st.TemporalPort, home)
+		db, ok := othersTemporal(ctx, sys, st, home)
 		if !ok {
 			return errStillAnswers(ctx, sys, st.TemporalPort)
 		}
@@ -510,7 +515,7 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		// 9.2.1, review 55).
 		db, others := "", false
 		if st.portAnswers() {
-			db, others = othersTemporal(ctx, sys, st.TemporalPort, *home)
+			db, others = othersTemporal(ctx, sys, st, *home)
 		}
 		if others {
 			fmt.Fprintf(out, "The Temporal on port %d is another home's (its database is %s); it was left running.\n", st.TemporalPort, db)

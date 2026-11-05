@@ -703,6 +703,7 @@ func TestE2EImages_Browse(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_IMAGES") != "1" {
 		t.Skip("set HEEDLE_E2E_IMAGES=1 to pull heedle's images and browse with them")
 	}
+	machinePodmanOnPath(t)
 	c, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	address := fmt.Sprintf("127.0.0.1:%d", freePort(t))

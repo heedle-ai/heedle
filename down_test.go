@@ -59,18 +59,34 @@ func TestMain(m *testing.M) {
 	}
 	homesDir = func() string { return dir }
 	// No test reaches the machine's own Podman, whose containers may be
-	// anyone's, unless it is a Podman end-to-end test, which asks for it:
-	// a podman that refuses goes first on the PATH (HEEDLE-530, review 55:
-	// a test's heedle down removed other sessions' containers).
-	if os.Getenv("HEEDLE_E2E_IMAGES") == "" && os.Getenv("HEEDLE_E2E_ACT") == "" && os.Getenv("HEEDLE_E2E_HOMES") == "" {
-		guard := filepath.Join(dir, "guard")
-		os.MkdirAll(guard, 0o700)
-		os.WriteFile(filepath.Join(guard, "podman"), []byte("#!/bin/sh\necho \"heedle tests never use the machine's podman\" >&2\nexit 125\n"), 0o755)
-		os.Setenv("PATH", guard+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// anyone's: a podman that refuses goes first on the PATH, always. A
+	// Podman end-to-end test puts the machine's back on its own PATH
+	// (machinePodmanOnPath), for itself only (HEEDLE-530, review 55: a
+	// test's heedle down removed other sessions' containers).
+	if p, err := exec.LookPath("podman"); err == nil {
+		machinePodman = p
 	}
+	guard := filepath.Join(dir, "guard")
+	os.MkdirAll(guard, 0o700)
+	os.WriteFile(filepath.Join(guard, "podman"), []byte("#!/bin/sh\necho \"heedle tests never use the machine's podman\" >&2\nexit 125\n"), 0o755)
+	os.Setenv("PATH", guard+string(os.PathListSeparator)+os.Getenv("PATH"))
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// machinePodman is the machine's podman, found before the guard went on
+// the PATH; "" without one.
+var machinePodman string
+
+// machinePodmanOnPath puts the machine's podman first on the PATH for
+// this test only: for the Podman end-to-end tests, and nothing else.
+func machinePodmanOnPath(t *testing.T) {
+	t.Helper()
+	if machinePodman == "" {
+		t.Fatal("podman isn't on the PATH")
+	}
+	t.Setenv("PATH", filepath.Dir(machinePodman)+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // standIn starts the test binary as a stand-in with the given arguments
