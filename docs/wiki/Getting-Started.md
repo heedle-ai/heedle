@@ -100,7 +100,7 @@ heedle can remember short facts about you, such as "Vegetarian." or "Home airpor
 
 **Memory** in the top bar shows everything heedle remembers, word for word, to edit or **Forget**. Forgetting takes it out of the file it lives in, `~/.heedle/memory.json` (`DIR/memory.json` with `heedle up -home DIR`), which is the only place heedle keeps a memory (never the Git store, whose history keeps everything). The next request then sends nothing of it, not even through an earlier turn of the conversation that used it.
 
-What goes to Claude: everything on that page, with every request to **Ask heedle**, as facts about you that Claude is told are never instructions. So it refuses anything that looks like a key, a card number or a password. Details for forms, such as your address, will belong in your profile, which Claude never sees (**Planned**: roadmap 9.8), not in memory.
+What goes to Claude: everything on that page, with every request to **Ask heedle**, as facts about you that Claude is told are never instructions. So it refuses anything that looks like a key, a card number or a password. Details for forms, such as your address, belong under **You** on the Connectors page, which Claude never sees (roadmap 9.8), not in memory.
 
 What Forget can't reach: records of what you did. Temporal's history (`~/.heedle/temporal.db`) keeps each request and its proposal, whose summary may mention what it relied on, and a run you started keeps its program in the Git store.
 

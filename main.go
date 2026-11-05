@@ -47,9 +47,9 @@ const usage = `usage:
                        heedle proposes how, says what it needs, and runs or
                        schedules it if you say so
   heedle COMMAND ...   a loom command: run, compile, worker, write, ask,
-                       writes, skills, branch, merge, beliefs, secret,
-                       memory, schedule, schedules, costs (heedle COMMAND -h
-                       for its flags)
+                       writes, forms, skills, branch, merge, beliefs,
+                       secret, memory, schedule, schedules, costs (heedle
+                       COMMAND -h for its flags)
   heedle version`
 
 func main() {
