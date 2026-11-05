@@ -78,6 +78,17 @@ func (st *upState) homeLabel(home string) string {
 	return bobbin.HomeOf(filepath.Join(home, "store.git"))
 }
 
+// sameDir reports whether a and b are the same folder, links resolved.
+func sameDir(a, b string) bool {
+	if r, err := filepath.EvalSymlinks(a); err == nil {
+		a = r
+	}
+	if r, err := filepath.EvalSymlinks(b); err == nil {
+		b = r
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
 // readHomeState is home's up.json, if it is this home's: one copied from
 // another home (with the home folder, while it ran) names that home's
 // processes, so it is never acted on here (review 55).
@@ -86,7 +97,7 @@ func readHomeState(home string) (*upState, error) {
 	if err != nil || st == nil {
 		return st, err
 	}
-	if st.Home != "" && absHome(st.Home) != home {
+	if filepath.IsAbs(st.Home) && !sameDir(st.Home, home) {
 		return nil, fmt.Errorf("%s is %s's, not this home's: it was copied here, so heedle leaves it alone (remove it if that heedle isn't running)", filepath.Join(home, upFile), st.Home)
 	}
 	return st, nil
@@ -203,6 +214,27 @@ func errStillAnswers(ctx context.Context, sys system, port int) error {
 	return fmt.Errorf("something still answers on Temporal's port %d%s, which heedle couldn't tell was the Temporal it started, so it's still running: stop it yourself", port, who)
 }
 
+// othersTemporal is the database of the dev server answering on port,
+// when lsof can say which process that is and it is a dev server with
+// another database than home's: another home's Temporal, now on the port
+// a stale up.json records (review 55).
+func othersTemporal(ctx context.Context, sys system, port int, home string) (string, bool) {
+	pid, err := sys.listener(ctx, port)
+	if err != nil {
+		return "", false
+	}
+	line, err := sys.procArgs(ctx, pid)
+	if err != nil || devServerOf(line, filepath.Join(home, "temporal.db")) {
+		return "", false
+	}
+	_, rest, ok := strings.Cut(line+" ", " --db-filename ")
+	db, _, _ := strings.Cut(rest, " ")
+	if !ok || !strings.Contains(line+" ", " start-dev ") || db == "" {
+		return "", false
+	}
+	return db, true
+}
+
 // portAnswers reports whether st's Temporal port answers.
 func (st *upState) portAnswers() bool {
 	return st.TemporalPort > 0 && answers(net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)))
@@ -297,7 +329,11 @@ func cleanStart(ctx context.Context, home string, sys system, out io.Writer) err
 	// up.json goes only once nothing answers on its Temporal's port: one
 	// heedle couldn't recognise is said, and up.json kept (review 55).
 	if st.portAnswers() {
-		return errStillAnswers(ctx, sys, st.TemporalPort)
+		db, ok := othersTemporal(ctx, sys, st.TemporalPort, home)
+		if !ok {
+			return errStillAnswers(ctx, sys, st.TemporalPort)
+		}
+		fmt.Fprintf(out, "The Temporal on port %d is another home's (its database is %s), so this home's up.json was stale.\n", st.TemporalPort, db)
 	}
 	return os.Remove(filepath.Join(home, upFile))
 }
@@ -317,7 +353,7 @@ func knownOld(ctx context.Context, hostPort, podman string) map[string]bool {
 		return known
 	}
 	for _, ct := range cs {
-		if ct.Labels.Home == "" && ct.Status != "" && ct.Status != "unknown" {
+		if ct.Labels.Home == "" && ct.Labels.Run != "" && ct.Status != "" && ct.Status != "unknown" {
 			known[ct.ID] = true
 		}
 	}
@@ -423,7 +459,14 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		// port, whether or not heedle found anything of its own running:
 		// up.json stays, and the next heedle down says so again (roadmap
 		// 9.2.1, review 55).
+		db, others := "", false
 		if st.portAnswers() {
+			db, others = othersTemporal(ctx, sys, st.TemporalPort, *home)
+		}
+		if others {
+			fmt.Fprintf(out, "The Temporal on port %d is another home's (its database is %s); it was left running.\n", st.TemporalPort, db)
+		}
+		if st.portAnswers() && !others {
 			still = errStillAnswers(ctx, sys, st.TemporalPort)
 			if len(did) > 0 && !temporal {
 				did[len(did)-1] = strings.TrimSuffix(did[len(did)-1], ", with its Temporal")
