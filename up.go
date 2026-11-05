@@ -395,7 +395,7 @@ func podmanAnswers(ctx context.Context, sys system, podman, machine string) erro
 	var b []byte
 	var err error
 	for try := 0; try < 30; try++ {
-		if b, err = sys.combined(ctx, podman, "info", "--format", "{{.Host.Os}}"); err == nil || ctx.Err() != nil {
+		if b, err = sys.combined(ctx, podman, "info", "--format", "{{.Host.Arch}}"); err == nil || ctx.Err() != nil {
 			break
 		}
 		select {
