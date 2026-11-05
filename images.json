@@ -1,4 +1,5 @@
 {
   "browser": "ghcr.io/heedle-ai/reed-browser@sha256:fc26a337519227208f17bbe5d5bcfe5d39c85297c421b259527f275070a5fc6f",
-  "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:54728e4d74422d95fe328fed0efafcdc714361c8da3b268978a0888797ab9389"
+  "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:54728e4d74422d95fe328fed0efafcdc714361c8da3b268978a0888797ab9389",
+  "browserAgent": "ghcr.io/heedle-ai/reed-browser-agent@sha256:ebc78a789256667e9df6364b0424399a7e26b5b0c43d406787856ac32c9ed17f"
 }

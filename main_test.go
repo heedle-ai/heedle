@@ -135,11 +135,11 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
 		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-browser-image", pinned.Browser, "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-browser-image", pinned.Browser, "-browser-agent-image", pinned.BrowserAgent, "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
-	if got := strings.Join(m.calls, "|"); got != "podman image exists "+pinned.Browser {
+	if got := strings.Join(m.calls, "|"); got != "podman image exists "+pinned.Browser+"|podman image exists "+pinned.BrowserAgent {
 		t.Errorf("on Linux, heedle up ran %q", got)
 	}
 
@@ -221,16 +221,22 @@ func TestInv_ImagesArePinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := strings.Repeat("a", 64)
+	ba := `, "browserAgent": "z@sha256:` + d + `"`
+	if _, err := readImages([]byte(`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"` + ba + `}`)); err != nil {
+		t.Fatalf("a good file: %v", err)
+	}
 	for _, bad := range []string{
-		`{"browser": "ghcr.io/heedle-ai/reed-browser:latest", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"}`,
-		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:abc", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"}`,
-		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:` + d + `"}`,
-		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "extra": "z"}`,
-		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"} {}`,
-		`{"browser": "-x@sha256:` + d + `", "agent": "y@sha256:` + d + `"}`,
-		// Roadmap 9.5: a browser-agent image is pinned like the others.
+		`{"browser": "ghcr.io/heedle-ai/reed-browser:latest", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"` + ba + `}`,
+		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:abc", "agent": "ghcr.io/heedle-ai/pirn-agent@sha256:` + d + `"` + ba + `}`,
+		`{"browser": "ghcr.io/heedle-ai/reed-browser@sha256:` + d + `"` + ba + `}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"` + ba + `, "extra": "z"}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"` + ba + `} {}`,
+		`{"browser": "-x@sha256:` + d + `", "agent": "y@sha256:` + d + `"` + ba + `}`,
+		// Roadmap 9.5: the browser-agent image is pinned like the others,
+		// and required once reed published it.
 		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "browserAgent": "ghcr.io/heedle-ai/reed-browser-agent:latest"}`,
 		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `", "browserAgent": "z@sha256:abc"}`,
+		`{"browser": "x@sha256:` + d + `", "agent": "y@sha256:` + d + `"}`,
 	} {
 		if _, err := readImages([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
@@ -239,7 +245,8 @@ func TestInv_ImagesArePinned(t *testing.T) {
 }
 
 // TestInv_UpGivesTheWorkerImages: heedle up pulls each of its pinned
-// images that Podman doesn't have, once, and gives both to the worker; an
+// images that Podman doesn't have, once, and gives each to the worker
+// (the browser-agent image too, since roadmap 9.5); an
 // image given after -- is the person's, neither pulled nor replaced; an
 // image that can't be pulled is said in a line and left out, and heedle
 // still starts; without Podman, nothing is pulled or given. (Roadmap 9.1:
@@ -256,9 +263,9 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 	}
 	has := map[string]bool{"git": true, "podman": true, "temporal": true}
 
-	m := &machine{goos: "darwin", machines: `[{"Name":"m","Running":true}]`, has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true}}
+	m := &machine{goos: "darwin", machines: `[{"Name":"m","Running":true}]`, has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true, pinned.BrowserAgent: true}}
 	served, out := start(m)
-	if served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent {
+	if served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent+" -browser-agent-image "+pinned.BrowserAgent {
 		t.Errorf("served %q", served)
 	}
 	pulls := 0
@@ -267,19 +274,19 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 			pulls++
 		}
 	}
-	if pulls != 2 || strings.Count(out, "Downloading the") != 2 {
+	if pulls != 3 || strings.Count(out, "Downloading the") != 3 {
 		t.Errorf("pulled %d times:\n%s", pulls, out)
 	}
 	// Already here: nothing pulled again.
 	m.calls, m.served = nil, nil
 	m.started, m.stopped = nil, 0
-	if served, out := start(m); served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent || strings.Contains(strings.Join(m.calls, "|"), "pull") || strings.Contains(out, "Downloading") {
+	if served, out := start(m); served != "-browser-image "+pinned.Browser+" -agent-image "+pinned.Agent+" -browser-agent-image "+pinned.BrowserAgent || strings.Contains(strings.Join(m.calls, "|"), "pull") || strings.Contains(out, "Downloading") {
 		t.Errorf("pulled again: %q %q", m.calls, out)
 	}
 
 	// The person's own image wins, in any spelling.
 	for _, own := range [][]string{{"--", "-agent-image", "mine"}, {"--", "--agent-image=mine"}} {
-		m := &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true}}
+		m := &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true, pinned.Agent: true, pinned.BrowserAgent: true}}
 		served, _ := start(m, own...)
 		if strings.Contains(served, pinned.Agent) || strings.Contains(strings.Join(m.calls, "|"), pinned.Agent) || !strings.Contains(served, "-browser-image "+pinned.Browser) {
 			t.Errorf("%q: served %q, ran %q", own, served, m.calls)
@@ -290,7 +297,7 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 	// Review 36: in one line, with podman's reason, not its exit status.
 	m = &machine{goos: "linux", has: has, missing: map[string]bool{pinned.Browser: true}, failPull: errors.New("unauthorized")}
 	served, out = start(m)
-	if served != "-agent-image "+pinned.Agent || strings.Contains(out, "Trying to pull") || strings.Contains(out, "Error:") || !strings.Contains(out, "Couldn't download the browser image") ||
+	if served != "-agent-image "+pinned.Agent+" -browser-agent-image "+pinned.BrowserAgent || strings.Contains(out, "Trying to pull") || strings.Contains(out, "Error:") || !strings.Contains(out, "Couldn't download the browser image") ||
 		!strings.Contains(out, "(unauthorized)") || !strings.Contains(out, "-browser-image ID") {
 		t.Errorf("a pull that fails: served %q\n%q", served, out)
 	}

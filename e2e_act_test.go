@@ -39,9 +39,7 @@ func TestE2EAct_FillsAForm(t *testing.T) {
 	}
 	img := os.Getenv("HEEDLE_E2E_ACT_IMAGE")
 	if img == "" {
-		if img = pinned.BrowserAgent; img == "" {
-			t.Fatal("images.json pins no browser-agent image yet; set HEEDLE_E2E_ACT_IMAGE")
-		}
+		img = pinned.BrowserAgent
 		if exec.Command("podman", "image", "exists", img).Run() != nil {
 			podman(t, "pull", "--quiet", img)
 		}

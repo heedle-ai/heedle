@@ -25,17 +25,15 @@ type images struct {
 	Browser string `json:"browser"` // reed's browser image, for browse steps
 	Agent   string `json:"agent"`   // pirn's agent image, for agent and skill steps
 	// BrowserAgent is reed's browser-agent image, for act steps (roadmap
-	// 9.5). It is the one image images.json may leave out, until reed
-	// publishes its first (image-v2): then it is pinned like the others.
-	BrowserAgent string `json:"browserAgent,omitempty"`
+	// 9.5): the browser image plus Node and a pinned Playwright MCP.
+	BrowserAgent string `json:"browserAgent"`
 }
 
 // pinnedRef is a ref pinned to content: name@sha256:<64 hex>.
 var pinnedRef = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$`)
 
-// readImages reads images.json strictly: one object, the browser and
-// agent images and perhaps the browser-agent image, each pinned to
-// content, nothing else.
+// readImages reads images.json strictly: one object, the browser, agent
+// and browser-agent images, each pinned to content, nothing else.
 func readImages(b []byte) (images, error) {
 	var im images
 	d := json.NewDecoder(bytes.NewReader(b))
@@ -46,11 +44,7 @@ func readImages(b []byte) (images, error) {
 	if d.More() {
 		return images{}, fmt.Errorf("images.json: more than one object")
 	}
-	refs := map[string]string{"browser": im.Browser, "agent": im.Agent}
-	if im.BrowserAgent != "" {
-		refs["browserAgent"] = im.BrowserAgent
-	}
-	for name, ref := range refs {
+	for name, ref := range map[string]string{"browser": im.Browser, "agent": im.Agent, "browserAgent": im.BrowserAgent} {
 		if !pinnedRef.MatchString(ref) {
 			return images{}, fmt.Errorf("images.json: %s image %q isn't pinned to content (name@sha256:<64 hex>)", name, ref)
 		}
