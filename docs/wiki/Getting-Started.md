@@ -151,6 +151,26 @@ The trip planner is a skill and two connectors, with no code: treadle's [`trip-p
 
 The run's output is the itinerary: a section for each day, its stops with times and addresses, notes on closures and holidays, and the pages it used. It only looks things up: it books, buys and saves nothing. To make sure of that whatever Claude does, list your maps connector's saving tools under `writes`, with `approve`, in `~/.heedle/connectors.json`; then any call to one waits for you. **Schedule…** it weekly to see what's on.
 
+## Share a skill, import a friend's
+
+Publish a skill you've made, or the trip planner, to a Git repository of yours; friends import it with one link, and their own review protects them. Make the repository on GitHub and clone it first (for example `gh repo create my-skills --public --clone`, run in `~/src`); for a try on your own machine, a local repository does:
+
+```sh
+git init -b main ~/src/my-skills
+./heedle skills publish trip-planner -repo ~/src/my-skills -store ~/.heedle/store.git
+```
+
+It writes the skill's newest approved version to `skills/trip-planner/` with a row in `skills/README.md`, commits it with your git identity, and prints the push for you to run: heedle never pushes. It refuses a version still waiting for review, and a skill whose files look like they hold a key, naming the file and line. A skill's page has **Share**, which shows the same command filled in and, given your repository's link, the link a friend imports it with: `https://github.com/YOU/my-skills/tree/main/skills/trip-planner`.
+
+To import a friend's, paste that link on the **skills** page, or **Browse a repository** with their repository's link and pick one or several: each is imported from the commit you saw listed, and waits for your review if it asks for connectors or comes from a repository you don't trust. From the terminal:
+
+```sh
+./heedle skills -catalog file://$HOME/src/my-skills
+./heedle skills -store ~/.heedle/store.git -import file://$HOME/src/my-skills -path skills/trip-planner
+```
+
+The import is the same files, byte for byte, as you published: the same version.
+
 ## Run a program on a schedule
 
 Write a program on the home page, then **Schedule…** beside **Run**: give it a name, and run it every hour, day or week, or at cron times in your time zone. The **schedules** page runs one now, pauses, resumes or deletes it. From the terminal:
