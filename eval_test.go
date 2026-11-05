@@ -15,6 +15,7 @@ import (
 
 	"github.com/heedle-ai/pirn"
 	"github.com/heedle-ai/reed"
+	"github.com/heedle-ai/warp"
 )
 
 // scoresPage is the wiki page TestEval_Course keeps: one row per release.
@@ -31,11 +32,12 @@ type score struct {
 	Decoy                int    // requests the injection form's decoy received
 	Course               string // which course: a hash of reed's testdata/forms
 	Failed               int    // forms whose run failed outright, counted as not done
+	Replayed             int    // forms a second run replayed whole, without Claude (roadmap 9.9)
 }
 
 func (s score) row() string {
-	return fmt.Sprintf("| %s | %s | %s | %s | %d of %d | %d of %d | %d | %d | %s | %d | %d |",
-		s.Release, s.Date, s.Model, s.Course, s.Completed, s.Fill, s.Refused, s.Refuse, s.Steps, s.Tokens, s.Took.Round(time.Second), s.Decoy, s.Failed)
+	return fmt.Sprintf("| %s | %s | %s | %s | %d of %d | %d of %d | %d | %d | %s | %d | %d | %d of %d |",
+		s.Release, s.Date, s.Model, s.Course, s.Completed, s.Fill, s.Refused, s.Refuse, s.Steps, s.Tokens, s.Took.Round(time.Second), s.Decoy, s.Failed, s.Replayed, s.Fill)
 }
 
 // releaseCell matches a scores row's first cell, its release.
@@ -58,7 +60,7 @@ func withScore(page string, s score) string {
 		}
 	}
 	if last < 0 {
-		lines = append(lines, "", "| Release | Date | Model | Course | Completed | Refused correctly | Steps | Tokens | Time | Decoy reached | Failed runs |", "|---|---|---|---|---|---|---|---|---|---|---|")
+		lines = append(lines, "", "| Release | Date | Model | Course | Completed | Refused correctly | Steps | Tokens | Time | Decoy reached | Failed runs | Replayed |", "|---|---|---|---|---|---|---|---|---|---|---|---|")
 		last = len(lines) - 1
 	}
 	lines = append(lines[:last+1], append([]string{s.row()}, lines[last+1:]...)...)
@@ -150,7 +152,8 @@ func TestEval_Course(t *testing.T) {
 		asked := 0
 		act := pirn.Act{Claude: pirn.Claude{APIKey: key, Model: model},
 			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
-		rec, err := tryAct(t, act, c.program(name))
+		store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
+		rec, err := tryActIn(t, act, c.program(name), store)
 		if err != nil {
 			// One form's failure (a rate limit, say) is that form not
 			// done, not the end of the run (review 40).
@@ -172,6 +175,15 @@ func TestEval_Course(t *testing.T) {
 			}
 		}
 		t.Logf("%s: done %v, ended %s, %d actions, %d tokens, asked %d, held %d", name, got.Done, rec.Ended, len(rec.Calls), rec.InputTokens+rec.OutputTokens, asked, rec.HeldTotal)
+		// The same program again (roadmap 9.9): a form that went through
+		// replays, without Claude, from the first run's script.
+		if err == nil && got.Done && !c.forms[name].Refuse {
+			again, err := tryActIn(t, act, c.program(name), store)
+			if err == nil && again.Replay != nil && !again.Replay.HandedOver && again.Replay.Replayed > 0 && again.InputTokens+again.OutputTokens == 0 {
+				s.Replayed++
+			}
+			t.Logf("%s again: replay %+v, %v", name, again.Replay, err)
+		}
 	}
 	s.Took = time.Since(start)
 	s.Decoy = c.hits()

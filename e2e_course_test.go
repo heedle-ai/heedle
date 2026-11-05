@@ -77,6 +77,13 @@ func browserAgentImage(t *testing.T) string {
 // starts the course and the decoy, each in a container of its own.
 func startCourse(t *testing.T) course {
 	t.Helper()
+	return startCourseEdited(t, nil)
+}
+
+// startCourseEdited is startCourse with the course's files changed by
+// edit first (its folder holds forms/), as a site changes its forms.
+func startCourseEdited(t *testing.T, edit func(dir string)) course {
+	t.Helper()
 	dir := t.TempDir()
 	build := exec.Command("go", "build", "-C", "../reed", "-o", filepath.Join(dir, "server"), "./testdata/forms/server")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
@@ -85,6 +92,9 @@ func startCourse(t *testing.T) course {
 	}
 	if out, err := exec.Command("cp", "-r", "../reed/testdata/forms", filepath.Join(dir, "forms")).CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)
+	}
+	if edit != nil {
+		edit(dir)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "forms", "course.json"))
 	if err != nil {
@@ -163,6 +173,18 @@ func runAct(t *testing.T, act pirn.Act, program string) pirn.ActResult {
 // test: the eval counts it and goes on (review 40).
 func tryAct(t *testing.T, act pirn.Act, program string) (pirn.ActResult, error) {
 	t.Helper()
+	store, err := warp.Init(ctx, filepath.Join(t.TempDir(), "store.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tryActIn(t, act, program, store)
+}
+
+// tryActIn is tryAct with the runs recorded in store, where the step
+// finds the script the last successful run of its program kept, as a
+// worker's loom.Scripts finds it (roadmap 9.9).
+func tryActIn(t *testing.T, act pirn.Act, program string, store *warp.Store) (pirn.ActResult, error) {
+	t.Helper()
 	var compiled strings.Builder
 	if err := run(ctx, []string{"compile", program}, &compiled); err != nil || !strings.Contains(compiled.String(), `"Act"`) {
 		t.Fatalf("heedle compile: %v\n%s", err, compiled.String())
@@ -171,19 +193,30 @@ func tryAct(t *testing.T, act pirn.Act, program string) (pirn.ActResult, error) 
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	env.SetTestTimeout(pirn.ActBudget + 5*time.Minute)
+	creg := draft.DefaultRegistry()
+	if err := creg.Register(pirn.ActBuiltinSpec()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loom.Compile(ctx, creg, program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := loom.RunInput{Program: program, Plan: p, Ref: loom.DefaultRef}
+	// Temporal's test environment has no history to read the run's input
+	// from, which loom.Scripts does; the program is known here.
+	id, err := loom.WorkflowID(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act.Script = func(ctx context.Context, node string) (pirn.ActScript, bool, error) {
+		return loom.LastScript(ctx, store, loom.DefaultRef, id, node)
+	}
 	if err := pirn.RegisterAct(reg, env, act); err != nil {
 		t.Fatal(err)
 	}
-	store, err := warp.Init(ctx, filepath.Join(t.TempDir(), "store.git"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	loom.Register(env, store, reg)
-	p, err := loom.Compile(ctx, reg, program)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env.ExecuteWorkflow(loom.RunWorkflowName, loom.RunInput{Program: program, Plan: p, Ref: loom.DefaultRef})
+	recordAsItsOwnRun(env, store)
+	env.ExecuteWorkflow(loom.RunWorkflowName, in)
 	if err := env.GetWorkflowError(); err != nil {
 		return pirn.ActResult{}, fmt.Errorf("the run failed: %v", err)
 	}
@@ -386,14 +419,21 @@ func TestE2ECourse_StandIn(t *testing.T) {
 	if len(scripts) != len(c.forms) {
 		t.Fatalf("%d scripts for %d forms", len(scripts), len(c.forms))
 	}
+	replayed := 0
 	for _, name := range c.names() {
 		t.Run(name, func(t *testing.T) {
 			claude := scripted(t, scripts[name]...)
 			asked := 0
 			act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
 				Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
-			rec := runAct(t, act, c.program(name))
+			store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
+			rec := runActIn(t, act, c.program(name), store)
 			got := c.check(name)
+			defer func() {
+				if !t.Failed() {
+					replayed += againReplays(t, c, name, img, store, got, rec, scripts[name])
+				}
+			}()
 			switch {
 			case c.forms[name].Refuse:
 				typed := 0
@@ -418,6 +458,12 @@ func TestE2ECourse_StandIn(t *testing.T) {
 				t.Errorf("asked %d times", asked)
 			}
 		})
+	}
+	// Roadmap 9.9: the second time round, every form that went through
+	// replayed without Claude; the one to refuse asked Claude again.
+	t.Logf("course, second run: %d of %d forms replayed without Claude", replayed, len(c.forms))
+	if want := len(c.forms) - 1; replayed != want {
+		t.Errorf("%d forms replayed the second time, want %d", replayed, want)
 	}
 	// Review 40: a password asked for through a label, inside a shadow
 	// root, and in a frame from another host is refused too.
@@ -498,6 +544,82 @@ func TestE2ECourse_StandIn(t *testing.T) {
 	}
 }
 
+// recordAsItsOwnRun records each run in env with a run ID of its own:
+// Temporal's test environment gives every run the same one, and a record
+// is one run's (loom's Record refuses a second record of a run ID).
+func recordAsItsOwnRun(env *testsuite.TestWorkflowEnvironment, store *warp.Store) {
+	rec := &loom.Recorder{Store: store}
+	env.RegisterActivityWithOptions(func(ctx context.Context, in loom.RecordInput) (warp.ID, error) {
+		in.RunID = fmt.Sprintf("test-run-%d", time.Now().UnixNano())
+		return rec.Record(ctx, in)
+	}, activity.RegisterOptions{Name: loom.RecordName, DisableAlreadyRegisteredCheck: true})
+}
+
+// runActIn is runAct, recorded in store.
+func runActIn(t *testing.T, act pirn.Act, program string, store *warp.Store) pirn.ActResult {
+	t.Helper()
+	rec, err := tryActIn(t, act, program, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func must2[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// noClaude is a stand-in Messages API that fails the test if it is asked
+// anything: an unchanged form replays without Claude (roadmap 9.9).
+func noClaude(t *testing.T) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Claude was asked during the replay of an unchanged form")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// againReplays runs form's program a second time on the same store
+// (roadmap 9.9): a form that went through replays the first run's script
+// with a Claude that fails if asked, the person asked about each send as
+// before, and the form's server receives exactly what it received the
+// first time, again; a form that didn't go through (the one to refuse)
+// finds no script and asks Claude again, and is refused again. It says
+// whether the form replayed.
+func againReplays(t *testing.T, c course, form, img string, store *warp.Store, first courseCheck, firstRec pirn.ActResult, moves []move) int {
+	t.Helper()
+	asked := 0
+	act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: noClaude(t).URL},
+		Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
+	if c.forms[form].Refuse {
+		act.Claude.BaseURL = scripted(t, moves...).URL
+	}
+	rec := runActIn(t, act, c.program(form), store)
+	got := c.check(form)
+	if c.forms[form].Refuse {
+		if rec.Replay != nil || got.Done != first.Done || len(got.Received) != 0 || rec.Ended != pirn.EndedStopped {
+			t.Errorf("a refused form the second time: replay %+v, received %v, ended %s", rec.Replay, got.Received, rec.Ended)
+		}
+		return 0
+	}
+	firstAsked := 0
+	for _, call := range firstRec.Calls {
+		if call.Tool == pirn.ConfirmTool && !call.IsError {
+			firstAsked++
+		}
+	}
+	if rp := rec.Replay; rp == nil || rp.HandedOver || rp.Replayed != len(firstRec.Script) || rec.Ended != pirn.EndedFinished || rec.Turns != 0 || rec.InputTokens+rec.OutputTokens != 0 ||
+		strings.Join(got.Received, "\n") != strings.Join(append(append([]string(nil), first.Received...), first.Received...), "\n") || asked != firstAsked {
+		t.Errorf("not replayed: %+v, ended %s, received %v (first %v), asked %d of %d", rec.Replay, rec.Ended, got.Received, first.Received, asked, firstAsked)
+		return 0
+	}
+	return 1
+}
+
 func must(b []byte, err error) []byte {
 	if err != nil {
 		panic(err)
@@ -534,52 +656,27 @@ func TestE2EProfile_LeavesNoValue(t *testing.T) {
 	var logs strings.Builder
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
-	reg := draft.DefaultRegistry()
-	var suite testsuite.WorkflowTestSuite
-	suite.SetLogger(tlog.NewStructuredLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))))
-	env := suite.NewTestWorkflowEnvironment()
-	env.SetTestTimeout(pirn.ActBudget + 5*time.Minute)
-	env.SetOnActivityHeartbeatListener(func(_ *activity.Info, details converter.EncodedValues) {
-		var b pirn.ActBeat
-		details.Get(&b)
-		j, _ := json.Marshal(b)
-		kept.Write(j)
-	})
-	env.SetOnActivityCompletedListener(func(_ *activity.Info, result converter.EncodedValue, err error) {
-		var out any
-		if result != nil && result.HasValue() {
-			result.Get(&out)
-		}
-		j, _ := json.Marshal(out)
-		kept.Write(j)
-		if err != nil {
-			kept.WriteString(err.Error())
-		}
-	})
-	if err := pirn.RegisterAct(reg, env, act); err != nil {
-		t.Fatal(err)
-	}
 	dir := filepath.Join(t.TempDir(), "store.git")
 	store, err := warp.Init(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	loom.Register(env, store, reg)
-	p, err := loom.Compile(ctx, reg, program)
-	if err != nil {
-		t.Fatal(err)
+	// Twice (roadmap 9.9): the second run replays the first's script,
+	// whose details are placeholders, and types the values again.
+	for round := 1; round <= 2; round++ {
+		if round == 2 {
+			act.Claude.BaseURL = noClaude(t).URL
+		}
+		rec := runProfiled(t, act, program, store, &kept, &logs)
+		if !strings.Contains(string(must(json.Marshal(rec.Script))), "⟨email⟩") {
+			t.Errorf("run %d's script lost the placeholders: %+v", round, rec.Script)
+		}
+		if round == 2 && (rec.Replay == nil || rec.Replay.HandedOver || rec.Replay.Replayed == 0) {
+			t.Errorf("not replayed: %+v", rec.Replay)
+		}
 	}
-	env.ExecuteWorkflow(loom.RunWorkflowName, loom.RunInput{Program: program, Plan: p, Ref: loom.DefaultRef})
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
-	var res loom.RunResult
-	env.GetWorkflowResult(&res)
-	j, _ := json.Marshal(res)
-	kept.Write(j)
-	rec, ok := pirn.ParseAct(res.Outputs["n0"])
-	if !ok || rec.Ended != pirn.EndedFinished || asked != 1 || strings.Join(rec.Uses, " ") != "name email phone" {
-		t.Fatalf("record: %+v, asked %d", rec, asked)
+	if asked != 2 || strings.Join(c.check("contact").Received[1:], "") != strings.Join(c.check("contact").Received[:1], "") {
+		t.Errorf("asked %d; received %v", asked, c.check("contact").Received)
 	}
 	// The form got the values.
 	got := c.check("contact").Received
@@ -603,5 +700,112 @@ func TestE2EProfile_LeavesNoValue(t *testing.T) {
 	}
 	if !strings.Contains(string(objects), "⟨email⟩") {
 		t.Error("the record lost the placeholders")
+	}
+}
+
+// runProfiled runs program, one act step, recorded in store, keeping in
+// kept everything Temporal kept of it (its result, every activity's
+// result and heartbeat) and in logs its logs.
+func runProfiled(t *testing.T, act pirn.Act, program string, store *warp.Store, kept, logs *strings.Builder) pirn.ActResult {
+	t.Helper()
+	reg := draft.DefaultRegistry()
+	var suite testsuite.WorkflowTestSuite
+	suite.SetLogger(tlog.NewStructuredLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetTestTimeout(pirn.ActBudget + 5*time.Minute)
+	env.SetOnActivityHeartbeatListener(func(_ *activity.Info, details converter.EncodedValues) {
+		var b pirn.ActBeat
+		details.Get(&b)
+		j, _ := json.Marshal(b)
+		kept.Write(j)
+	})
+	env.SetOnActivityCompletedListener(func(_ *activity.Info, result converter.EncodedValue, err error) {
+		var out any
+		if result != nil && result.HasValue() {
+			result.Get(&out)
+		}
+		j, _ := json.Marshal(out)
+		kept.Write(j)
+		if err != nil {
+			kept.WriteString(err.Error())
+		}
+	})
+	creg := draft.DefaultRegistry()
+	creg.Register(pirn.ActBuiltinSpec())
+	p, err := loom.Compile(ctx, creg, program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := loom.RunInput{Program: program, Plan: p, Ref: loom.DefaultRef}
+	id, _ := loom.WorkflowID(ctx, in)
+	act.Script = func(ctx context.Context, node string) (pirn.ActScript, bool, error) {
+		return loom.LastScript(ctx, store, loom.DefaultRef, id, node)
+	}
+	if err := pirn.RegisterAct(reg, env, act); err != nil {
+		t.Fatal(err)
+	}
+	loom.Register(env, store, reg)
+	recordAsItsOwnRun(env, store)
+	env.ExecuteWorkflow(loom.RunWorkflowName, in)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	var res loom.RunResult
+	env.GetWorkflowResult(&res)
+	j, _ := json.Marshal(res)
+	kept.Write(j)
+	rec, ok := pirn.ParseAct(res.Outputs["n0"])
+	if !ok || rec.Ended != pirn.EndedFinished || strings.Join(rec.Uses, " ") != "name email phone" {
+		t.Fatalf("record: %+v", rec)
+	}
+	return rec
+}
+
+// TestE2EReplay_RenamedFieldHandsOver is ci:e2e-course's run of a form
+// that changed (roadmap 9.9): the contact form, filled once by a stand-in
+// Claude, is renamed on the site ("Email" becomes "Email address") before
+// the same program runs again. The replay opens the page as recorded,
+// sees the page differ at the action that fills the renamed field, and
+// hands the rest to Claude there, saying so in the record; Claude fills
+// the renamed form, the person is asked, and the form arrives.
+func TestE2EReplay_RenamedFieldHandsOver(t *testing.T) {
+	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
+		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
+	}
+	img := browserAgentImage(t)
+	store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
+	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
+	fillAs := func(email string) move {
+		return fill(t, tb("Full name", "Ada Lovelace"), tb(email, "ada@example.org"), tb("Phone", "020 7946 0018"), tb("Message", "Please call me back."))
+	}
+	asked := 0
+	first := startCourse(t)
+	act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: scripted(t, open(t, "contact"), snapshot(t), fillAs("Email"), confirm("Ada Lovelace, ada@example.org."),
+		click(t, `button "Send"`), say("Sent.\nResult: finished")).URL}, Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: first.network}}, Image: img, Confirm: yes(&asked)}
+	rec := runActIn(t, act, first.program("contact"), store)
+	if !first.check("contact").Done || len(rec.Script) != 4 {
+		t.Fatalf("the first run: %+v", rec)
+	}
+	renamed := startCourseEdited(t, func(dir string) {
+		p := filepath.Join(dir, "forms", "contact", "index.html")
+		b, err := os.ReadFile(p)
+		if err != nil || !strings.Contains(string(b), "<label>Email <input") {
+			t.Fatalf("the contact form changed: %v", err)
+		}
+		os.WriteFile(p, []byte(strings.Replace(string(b), "<label>Email <input", "<label>Email address <input", 1)), 0o644)
+	})
+	var seen []string
+	act.Browser = pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: renamed.network}}
+	act.Claude.BaseURL = scriptedSeeing(t, &seen, snapshot(t), fillAs("Email address"), confirm("Ada Lovelace, ada@example.org."), click(t, `button "Send"`), say("Sent.\nResult: finished")).URL
+	rec = runActIn(t, act, first.program("contact"), store)
+	rp := rec.Replay
+	if rp == nil || !rp.HandedOver || rp.At != 2 || rp.Replayed != 1 || !strings.Contains(rp.Why, `it has no getByRole("textbox", { name: "Email", exact: true })`) || !strings.Contains(rp.Why, "Email address") {
+		t.Fatalf("replay: %+v", rp)
+	}
+	if !renamed.check("contact").Done || rec.Ended != pirn.EndedFinished || asked != 2 || len(seen) == 0 || !strings.Contains(seen[0], "stopped before action 2 of 4") {
+		t.Errorf("after the handover: received %v, ended %s, asked %d", renamed.check("contact").Received, rec.Ended, asked)
+	}
+	if !rec.Calls[0].Replayed || rec.Calls[1].Replayed {
+		t.Errorf("calls: %+v", rec.Calls)
 	}
 }
