@@ -580,7 +580,7 @@ func TestE2E_Up(t *testing.T) {
 	// nothing.
 	var costs bytes.Buffer
 	if err := run(c, []string{"costs", "-store", filepath.Join(home, "store.git"), "-prices", filepath.Join(home, "prices.json")}, &costs); err != nil ||
-		!strings.Contains(costs.String(), "no runs asked Claude this month") {
+		!strings.Contains(costs.String(), "no runs asked Claude in ") {
 		t.Errorf("heedle costs: %v\n%s", err, costs.String())
 	}
 	sched.Reset()
@@ -693,7 +693,7 @@ func TestE2EImages_Browse(t *testing.T) {
 }
 
 // TestInv_BudgetNoticesOpenTheSchedules: a notice about a schedule itself
-// (its budget paused it, or a new month resumed it) links to the
+// (its budget paused it) links to the
 // Schedules page, where its budget is; a run's notice to the run.
 // (Roadmap 10.4.)
 func TestInv_BudgetNoticesOpenTheSchedules(t *testing.T) {
