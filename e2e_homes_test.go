@@ -115,11 +115,10 @@ func TestE2EHomes_TwoAtOnce(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_HOMES") != "1" {
 		t.Skip("set HEEDLE_E2E_HOMES=1 to run two homes at once against real Temporal servers and Podman")
 	}
-	for _, p := range []string{"podman", "temporal"} {
-		if _, err := exec.LookPath(p); err != nil {
-			t.Fatalf("%s isn't on the PATH", p)
-		}
+	if _, err := exec.LookPath("temporal"); err != nil {
+		t.Fatal("temporal isn't on the PATH")
 	}
+	machinePodmanOnPath(t)
 	c, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	bin := heedleBin(t)

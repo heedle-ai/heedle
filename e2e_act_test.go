@@ -38,6 +38,7 @@ func TestE2EAct_FillsAForm(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to fill in a form with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := os.Getenv("HEEDLE_E2E_ACT_IMAGE")
 	if img == "" {
 		img = pinned.BrowserAgent

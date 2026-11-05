@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -174,6 +175,9 @@ func TestInv_DownTouchesOnlyThisHome(t *testing.T) {
 	db := filepath.Join(homeA, "temporal.db")
 	if !devServerOf("/t server start-dev --db-filename "+db, homeA) || devServerOf("/t server start-dev --db-filename "+db+"-x --port 1", homeA) || devServerOf("/t server start --db-filename "+db, homeA) {
 		t.Error("devServerOf doesn't match whole arguments")
+	}
+	if got := dbArg("/t server start-dev --db-filename /a b/temporal.db -f x"); got != "/a b/temporal.db" {
+		t.Errorf("dbArg = %q", got)
 	}
 }
 
@@ -504,20 +508,35 @@ func TestInv_WikiSaysWhatHomesNeed(t *testing.T) {
 	}
 }
 
-// TestInv_TestsNeverReachTheMachinesPodman: unless a Podman end-to-end
-// test is asked for, the podman on the tests' PATH is one that refuses,
-// so no test can list or remove the machine's containers (HEEDLE-530,
-// review 55).
+// TestInv_TestsNeverReachTheMachinesPodman: the podman on the tests' PATH
+// is one that refuses, whatever the environment asks, so no test can list
+// or remove the machine's containers; only a Podman end-to-end test puts
+// the machine's back, on its own PATH (machinePodmanOnPath), and every
+// test that does is one of them (HEEDLE-530, review 55).
 func TestInv_TestsNeverReachTheMachinesPodman(t *testing.T) {
-	if os.Getenv("HEEDLE_E2E_IMAGES") != "" || os.Getenv("HEEDLE_E2E_ACT") != "" || os.Getenv("HEEDLE_E2E_HOMES") != "" {
-		t.Log("a Podman end-to-end test was asked for: the machine's podman is used, in its own store for two homes")
-		return
-	}
 	p, err := exec.LookPath("podman")
 	if err != nil {
-		return
+		t.Fatal("no podman on the tests' PATH: the guard is missing")
 	}
 	if out, err := exec.Command(p, "ps").CombinedOutput(); err == nil || !strings.Contains(string(out), "never use the machine's podman") {
 		t.Errorf("the tests' podman (%s) is the machine's: %v\n%s", p, err, out)
+	}
+	files, _ := filepath.Glob("*_test.go")
+	allowed := map[string]bool{"TestE2EImages_Browse": true, "TestE2EAct_FillsAForm": true, "TestE2ECourse_StandIn": true, "TestE2EProfile_LeavesNoValue": true, "TestE2EHomes_TwoAtOnce": true}
+	fn := regexp.MustCompile(`(?m)^func (\w+)\(`)
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		src := string(b)
+		locs := fn.FindAllStringSubmatchIndex(src, -1)
+		for i, l := range locs {
+			end := len(src)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			name := src[l[2]:l[3]]
+			if strings.Contains(src[l[0]:end], "machinePodmanOnPath(t)") && name != "machinePodmanOnPath" && name != "TestInv_TestsNeverReachTheMachinesPodman" && !allowed[name] {
+				t.Errorf("%s: %s puts the machine's podman on its PATH, but isn't a Podman end-to-end test", f, name)
+			}
+		}
 	}
 }

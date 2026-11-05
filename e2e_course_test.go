@@ -379,6 +379,7 @@ func TestE2ECourse_StandIn(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := browserAgentImage(t)
 	c := startCourse(t)
 	scripts := standInScripts(t)
@@ -515,6 +516,7 @@ func TestE2EProfile_LeavesNoValue(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := browserAgentImage(t)
 	c := startCourse(t)
 	profile := map[string]string{"name": "Ada Lovelace", "email": "ada@example.org", "phone": "020 7946 0018"}
