@@ -113,20 +113,64 @@ func TestInv_DownTouchesOnlyThisHome(t *testing.T) {
 	if got := removed(t, log); got != "a" {
 		t.Errorf("down for home A removed %q, want only A's", got)
 	}
-	if !strings.Contains(out.String(), "1 of this home's containers") || !strings.Contains(out.String(), "Left 1 container from before heedle labelled homes, since heedle runs from another home too ("+homeB+")") {
+	if !strings.Contains(out.String(), "1 of this home's containers") || !strings.Contains(out.String(), "Left 1 container from before heedle labelled homes whose run this home's Temporal doesn't know") {
 		t.Errorf("down for home A said:\n%s", out.String())
 	}
 	if !running(stB.PID) {
 		t.Fatal("down for home A stopped home B's heedle")
 	}
-	// Now only B runs: the old container goes with B's, never the one
-	// whose label isn't a home.
+	// Review 55: a heedle older than homes, in another home, says nothing
+	// in the homes folder; with no other home in sight, an old container
+	// whose run this home's Temporal can't vouch for still stays. (Which
+	// runs a Temporal knows is checked for real by TestE2EHomes_TwoAtOnce.)
 	out.Reset()
 	if err := down(ctx, []string{"-home", homeB}, &out, sys); err != nil {
 		t.Fatal(err)
 	}
-	if got := removed(t, log); got != "bc" || strings.Contains(out.String(), "Left") {
+	if got := removed(t, log); got != "b" || !strings.Contains(out.String(), "Left 1 container") {
 		t.Errorf("down for home B removed %q:\n%s", got, out.String())
+	}
+
+	// Review 55: an up.json copied from another home (with the home
+	// folder, while it ran) names that home's processes: never acted on.
+	homeC := t.TempDir()
+	stD := runningHome(t, t.TempDir())
+	writeUpState(homeC, stD)
+	if err := down(ctx, []string{"-home", homeC}, &out, sys); err == nil || !strings.Contains(err.Error(), "copied here") || !running(stD.PID) {
+		t.Errorf("down with a copied up.json: %v; its heedle running %v", err, running(stD.PID))
+	}
+	if got := removed(t, log); got != "" {
+		t.Errorf("down with a copied up.json removed %q", got)
+	}
+	if err := cleanStart(ctx, homeC, sys, io.Discard); err == nil || !running(stD.PID) {
+		t.Errorf("the clean start with a copied up.json: %v", err)
+	}
+	// Exact arguments: a database whose name only starts with this one's
+	// is another's.
+	db := filepath.Join(homeA, "temporal.db")
+	if !devServerOf("/t server start-dev --db-filename "+db, db) || devServerOf("/t server start-dev --db-filename "+db+"-x --port 1", db) || devServerOf("/t server start --db-filename "+db, db) {
+		t.Error("devServerOf doesn't match whole arguments")
+	}
+}
+
+// TestInv_UpStopsIfOtherHomesCantSeeIt: heedle up that can't say its home
+// runs (the homes folder can't be made) stops, leaving nothing running
+// and no up.json, rather than run unseen by other homes' prunes
+// (HEEDLE-526, review 55).
+func TestInv_UpStopsIfOtherHomesCantSeeIt(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(blocker, nil, 0o600)
+	old := homesDir
+	homesDir = func() string { return filepath.Join(blocker, "homes") }
+	t.Cleanup(func() { homesDir = old })
+	home := t.TempDir()
+	m := &machine{goos: "linux", has: map[string]bool{"git": true, "temporal": true}}
+	err := up(ctx, []string{"-home", home, "-notify=false", "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, m.system())
+	if err == nil || !strings.Contains(err.Error(), "saying this home runs") || m.served != nil || m.stopped != 1 {
+		t.Errorf("up that can't say its home runs: %v (served %v, Temporal stopped %d times)", err, m.served != nil, m.stopped)
+	}
+	if _, err := os.Stat(filepath.Join(home, upFile)); err == nil {
+		t.Error("up.json was left")
 	}
 }
 
@@ -290,6 +334,18 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, upFile)); err != nil {
 		t.Error("up.json went while Temporal still answers")
 	}
+	// Review 55: a second heedle down, with nothing of its own left to
+	// stop, still says so, and keeps up.json; so does the clean start.
+	out.Reset()
+	if err := down(ctx, []string{"-home", home}, &out, real); err == nil || !strings.Contains(err.Error(), "still answers") || strings.Contains(out.String(), "Nothing of heedle's") {
+		t.Errorf("a second down: %v\n%s", err, out.String())
+	}
+	if err := cleanStart(ctx, home, real, io.Discard); err == nil || !strings.Contains(err.Error(), "still answers") {
+		t.Errorf("the clean start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, upFile)); err != nil {
+		t.Error("up.json went while Temporal still answers")
+	}
 }
 
 // TestInv_ContainersAreThisHomes: heedle containers gives loom's this
@@ -336,4 +392,18 @@ func answersAt(port int) bool {
 	}
 	c.Close()
 	return true
+}
+
+// TestInv_WikiSaysWhatHomesNeed: Getting Started lists lsof and says to
+// give each home its own -home, not its own HOME (HEEDLE-529, review 55).
+func TestInv_WikiSaysWhatHomesNeed(t *testing.T) {
+	b, err := os.ReadFile("docs/wiki/Getting-Started.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"`lsof`, on the PATH", "Give each its own `-home` rather than its own `HOME`"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("Getting-Started.md doesn't say %q", want)
+		}
+	}
 }

@@ -11,10 +11,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/heedle-ai/bobbin"
 )
 
 // TestMain lets the test binary stand in for a process heedle may stop:
@@ -162,6 +165,12 @@ func TestInv_UpRecordsWhatItStarted(t *testing.T) {
 		seen.Temporal.PID != 4242 || strings.Join(seen.Temporal.Args, " ") != strings.Join(m.started, " ") ||
 		seen.TemporalPort != port || seen.TemporalUIPort != uiPort || seen.UI != "http://127.0.0.1:9000" || strings.Join(seen.Keep, " ") != "mine" {
 		t.Errorf("up.json while serving: %+v", seen)
+	}
+	// Review 55: the label is the one the worker's store has, and the UI
+	// is told where running homes say so.
+	served := m.served[slices.Index(m.served, "-store")+1]
+	if seen.HomeLabel != bobbin.HomeOf(served) || served != filepath.Join(home, "store.git") || !slices.Contains(m.served, "-homes") {
+		t.Errorf("up.json's home label %q, the store served %q (label %q), the UI's flags %q", seen.HomeLabel, served, bobbin.HomeOf(served), m.served)
 	}
 	if seen.Temporal.Cmdline != "/opt/temporal/real-temporal server start-dev --db-filename "+filepath.Join(home, "temporal.db") {
 		t.Errorf("up.json's Temporal command line is %q, not what the system reported", seen.Temporal.Cmdline)
@@ -364,10 +373,12 @@ func TestInv_DownRemovesOnlyHeedlesContainers(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
-	if !strings.Contains(string(b), "rm --force --time 0 --ignore "+strings.Repeat("a", 64)+"\n") || strings.Contains(string(b), strings.Repeat("b", 64)) {
+	if strings.Contains(string(b), "rm --force") || strings.Contains(string(b), strings.Repeat("b", 64)) {
 		t.Errorf("podman calls:\n%s", b)
 	}
-	if want := fmt.Sprintf("Stopped heedle (pid %d, http://127.0.0.1:8090) and its worker, with its Temporal; 1 of this home's containers.\n", heedle); out.String() != want {
+	// Review 55: the old container (no home label) stays, since no
+	// Temporal of this home vouched for its run.
+	if want := fmt.Sprintf("Stopped heedle (pid %d, http://127.0.0.1:8090) and its worker, with its Temporal.\nLeft 1 container from before heedle labelled homes whose run this home's Temporal doesn't know: they may be another home's (heedle containers lists them).\n", heedle); out.String() != want {
 		t.Errorf("down said %q, want %q", out.String(), want)
 	}
 }

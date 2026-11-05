@@ -72,13 +72,24 @@ type process struct {
 	Cmdline string `json:"cmdline"`
 }
 
-// homeLabel is the label of home's containers: up.json's, else the one
-// its store would have (bobbin.HomeOf).
+// homeLabel is the label of home's containers: the one its store has
+// (bobbin.HomeOf), never taken on trust from up.json (review 55).
 func (st *upState) homeLabel(home string) string {
-	if st != nil && bobbin.ValidHome(st.HomeLabel) {
-		return st.HomeLabel
-	}
 	return bobbin.HomeOf(filepath.Join(home, "store.git"))
+}
+
+// readHomeState is home's up.json, if it is this home's: one copied from
+// another home (with the home folder, while it ran) names that home's
+// processes, so it is never acted on here (review 55).
+func readHomeState(home string) (*upState, error) {
+	st, err := readUpState(home)
+	if err != nil || st == nil {
+		return st, err
+	}
+	if st.Home != "" && absHome(st.Home) != home {
+		return nil, fmt.Errorf("%s is %s's, not this home's: it was copied here, so heedle leaves it alone (remove it if that heedle isn't running)", filepath.Join(home, upFile), st.Home)
+	}
+	return st, nil
 }
 
 func writeUpState(home string, st upState) error {
@@ -154,7 +165,7 @@ func ourTemporal(ctx context.Context, sys system, st *upState, home string) bool
 		return false
 	}
 	line := st.temporalLine()
-	if !strings.Contains(line, " start-dev ") || !strings.Contains(line, " --db-filename "+db) {
+	if !devServerOf(line, db) {
 		return false
 	}
 	return isProcess(ctx, sys, st.Temporal.PID, line)
@@ -168,11 +179,33 @@ func ourListener(ctx context.Context, sys system, st *upState, home string) bool
 	if l == nil || l.PID == st.Temporal.PID {
 		return false
 	}
-	db := filepath.Join(home, "temporal.db")
-	if !strings.Contains(l.Cmdline, " start-dev ") || !strings.Contains(l.Cmdline, " --db-filename "+db) {
+	if !devServerOf(l.Cmdline, filepath.Join(home, "temporal.db")) {
 		return false
 	}
 	return isProcess(ctx, sys, l.PID, l.Cmdline)
+}
+
+// devServerOf reports whether line, a command line as the system reports
+// it, is a dev server (start-dev) with exactly db as its database: whole
+// arguments, so .../temporal.db-x is another database (review 55).
+func devServerOf(line, db string) bool {
+	line += " "
+	return strings.Contains(line, " start-dev ") && strings.Contains(line, " --db-filename "+db+" ")
+}
+
+// errStillAnswers says something answers on Temporal's port that heedle
+// can't tell is the Temporal it started.
+func errStillAnswers(ctx context.Context, sys system, port int) error {
+	who := ""
+	if pid, err := sys.listener(ctx, port); err == nil {
+		who = fmt.Sprintf(" (pid %d)", pid)
+	}
+	return fmt.Errorf("something still answers on Temporal's port %d%s, which heedle couldn't tell was the Temporal it started, so it's still running: stop it yourself", port, who)
+}
+
+// portAnswers reports whether st's Temporal port answers.
+func (st *upState) portAnswers() bool {
+	return st.TemporalPort > 0 && answers(net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)))
 }
 
 // listening is the process that listens on 127.0.0.1:port, as lsof
@@ -239,7 +272,7 @@ func stopProcess(ctx context.Context, sys system, pid int, line string, wait tim
 // left is, it stops it. Anything else on Temporal's ports still fails, as
 // before.
 func cleanStart(ctx context.Context, home string, sys system, out io.Writer) error {
-	st, err := readUpState(home)
+	st, err := readHomeState(home)
 	if err != nil || st == nil {
 		return err
 	}
@@ -261,7 +294,34 @@ func cleanStart(ctx context.Context, home string, sys system, out io.Writer) err
 		}
 		fmt.Fprintf(out, "Stopped the Temporal a previous heedle up left running (pid %d).\n", st.Temporal.PID)
 	}
+	// up.json goes only once nothing answers on its Temporal's port: one
+	// heedle couldn't recognise is said, and up.json kept (review 55).
+	if st.portAnswers() {
+		return errStillAnswers(ctx, sys, st.TemporalPort)
+	}
 	return os.Remove(filepath.Join(home, upFile))
+}
+
+// knownOld are heedle's containers without a home label (from before
+// roadmap 9.2.1) whose run the Temporal at hostPort knows: this home's.
+// Asked of Temporal before heedle stops it; none if it can't say.
+func knownOld(ctx context.Context, hostPort, podman string) map[string]bool {
+	known := map[string]bool{}
+	c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quiet{}, ConnectionOptions: client.ConnectionOptions{GetSystemInfoTimeout: 5 * time.Second}})
+	if err != nil {
+		return known
+	}
+	defer c.Close()
+	cs, err := loom.Containers(ctx, c, bobbin.Runner{Podman: podman})
+	if err != nil {
+		return known
+	}
+	for _, ct := range cs {
+		if ct.Labels.Home == "" && ct.Status != "" && ct.Status != "unknown" {
+			known[ct.ID] = true
+		}
+	}
+	return known
 }
 
 // sweep removes this home's containers whose run has ended, now Temporal
@@ -314,9 +374,19 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 	*home = absHome(*home)
 	var did []string
 	var still error
-	st, err := readUpState(*home)
+	st, err := readHomeState(*home)
 	if err != nil {
 		return err
+	}
+	label := st.homeLabel(*home)
+	// A container from before homes were labelled may be any home's,
+	// even one whose heedle is older than homes and says nothing: it goes
+	// only if this home's Temporal knows its run, asked before it stops
+	// (review 55).
+	podman, perr := sys.lookPath("podman")
+	known := map[string]bool{}
+	if st != nil && perr == nil && st.portAnswers() {
+		known = knownOld(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)), podman)
 	}
 	if st != nil {
 		if line := strings.Join(st.Args, " "); isProcess(ctx, sys, st.PID, line) {
@@ -350,15 +420,12 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 			did[len(did)-1] += ", with its Temporal"
 		}
 		// Never say Temporal stopped while something still answers on its
-		// port: a Temporal heedle couldn't recognise as its own is left
-		// running, and said (roadmap 9.2.1).
-		if port := st.TemporalPort; len(did) > 0 && port > 0 && answers(net.JoinHostPort("127.0.0.1", strconv.Itoa(port))) {
-			who := ""
-			if pid, err := sys.listener(ctx, port); err == nil {
-				who = fmt.Sprintf(" (pid %d)", pid)
-			}
-			still = fmt.Errorf("something still answers on Temporal's port %d%s, which heedle couldn't tell was the Temporal it started, so it's still running: stop it yourself", port, who)
-			if !temporal {
+		// port, whether or not heedle found anything of its own running:
+		// up.json stays, and the next heedle down says so again (roadmap
+		// 9.2.1, review 55).
+		if st.portAnswers() {
+			still = errStillAnswers(ctx, sys, st.TemporalPort)
+			if len(did) > 0 && !temporal {
 				did[len(did)-1] = strings.TrimSuffix(did[len(did)-1], ", with its Temporal")
 			} else if wrapper >= 0 {
 				did[wrapper] = fmt.Sprintf("the process heedle started Temporal with (pid %d)", st.Temporal.PID)
@@ -368,21 +435,19 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		}
 	}
 	if len(did) == 0 {
+		if still != nil {
+			return still
+		}
 		fmt.Fprintln(out, "Nothing of heedle's was running.")
 		return nil
 	}
-	if podman, err := sys.lookPath("podman"); err == nil {
-		label := st.homeLabel(*home)
-		// A container from before homes were labelled may be another
-		// home's: it goes only when no other home's heedle runs.
-		others := otherHomes(ctx, sys, *home)
+	if perr == nil {
 		var left int
 		gone, err := bobbin.Runner{Podman: podman}.Remove(ctx, func(c bobbin.Container) bool {
-			if c.Labels.Home == "" && len(others) > 0 {
+			if c.Labels.Home == "" && !known[c.ID] {
 				left++
-				return false
 			}
-			return c.Labels.Home == label || c.Labels.Home == ""
+			return c.Labels.Home == label || c.Labels.Home == "" && known[c.ID]
 		})
 		if err != nil {
 			return fmt.Errorf("removing heedle's containers: %w", err)
@@ -391,7 +456,7 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 			did = append(did, fmt.Sprintf("%d of this home's containers", len(gone)))
 		}
 		if left > 0 {
-			defer fmt.Fprintf(out, "Left %d container%s from before heedle labelled homes, since heedle runs from another home too (%s).\n", left, plural(left), strings.Join(others, ", "))
+			defer fmt.Fprintf(out, "Left %d container%s from before heedle labelled homes whose run this home's Temporal doesn't know: they may be another home's (heedle containers lists them).\n", left, plural(left))
 		}
 	}
 	fmt.Fprintf(out, "Stopped %s.\n", strings.Join(did, "; "))

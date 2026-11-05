@@ -79,12 +79,17 @@ func runningHomes(ctx context.Context, sys system) []string {
 			continue
 		}
 		home := strings.TrimSpace(string(b))
-		st, err := readUpState(home)
-		if err != nil || st == nil || st.homeLabel(home) != e.Name() {
+		st, err := readHomeState(home)
+		if err == nil && st != nil && st.homeLabel(home) == e.Name() &&
+			(isProcess(ctx, sys, st.PID, strings.Join(st.Args, " ")) || ourTemporal(ctx, sys, st, home) || ourListener(ctx, sys, st, home)) {
+			homes = append(homes, home)
 			continue
 		}
-		if isProcess(ctx, sys, st.PID, strings.Join(st.Args, " ")) || ourTemporal(ctx, sys, st, home) || ourListener(ctx, sys, st, home) {
-			homes = append(homes, home)
+		// Left by a heedle that was killed: it says nothing, so it goes,
+		// and the UI's prune (which only looks for such files) isn't held
+		// back by it (review 55).
+		if err == nil && (st == nil || st.homeLabel(home) == e.Name()) {
+			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
 	sort.Strings(homes)
