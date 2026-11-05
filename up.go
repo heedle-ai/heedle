@@ -385,8 +385,8 @@ func queueOf(uiArgs []string) string {
 }
 
 // noticeLink is where a notice's link goes: a run's page, or, for a
-// notice about a schedule itself (its budget paused it, or a new month
-// resumed it: roadmap 10.4), the Schedules page.
+// notice about a schedule itself (its budget paused it: roadmap 10.4),
+// the Schedules page.
 func noticeLink(base string, n loom.Notice) string {
 	if n.Schedule != "" {
 		return base + "/#/schedules"
