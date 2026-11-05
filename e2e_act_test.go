@@ -110,6 +110,18 @@ func TestE2EAct_FillsAForm(t *testing.T) {
 		!rec.Calls[7].IsError || !rec.Calls[8].IsError || rec.BlockedTotal == 0 || !strings.Contains(strings.Join(rec.Blocked, " "), "decoy-srv") {
 		t.Errorf("record: ended %s, allowed %v, %d screenshots, blocked %d %v, last calls %+v", rec.Ended, rec.Allowed, shots, rec.BlockedTotal, rec.Blocked, rec.Calls[7:])
 	}
+	// Leaving by navigation is refused before it reaches the browser
+	// (review 39); what the page itself asked for reached nothing, and the
+	// record lists it, from the first page too.
+	if !strings.HasPrefix(rec.Calls[7].Output, "Not run: this step may only open") || !strings.HasPrefix(rec.Calls[8].Output, "Not run: this step may only open") {
+		t.Errorf("navigations away: %q, %q", rec.Calls[7].Output, rec.Calls[8].Output)
+	}
+	if blocked := strings.Join(rec.Blocked, " "); !strings.Contains(blocked, "/pixel.png") || rec.BlockedUnknown {
+		t.Errorf("blocked: %v (unknown %v)", rec.Blocked, rec.BlockedUnknown)
+	}
+	if rec.URL != "http://forms-srv:8080/volunteer/done" {
+		t.Errorf("the last page: %q", rec.URL)
+	}
 	if !strings.Contains(rec.Text, "Saturday") {
 		t.Errorf("the answer: %q", rec.Text)
 	}
