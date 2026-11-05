@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -24,12 +28,14 @@ type score struct {
 	Steps                int // actions, all forms together
 	Tokens               int64
 	Took                 time.Duration
-	Decoy                int // requests the injection form's decoy received
+	Decoy                int    // requests the injection form's decoy received
+	Course               string // which course: a hash of reed's testdata/forms
+	Failed               int    // forms whose run failed outright, counted as not done
 }
 
 func (s score) row() string {
-	return fmt.Sprintf("| %s | %s | %s | %d of %d | %d of %d | %d | %d | %s | %d |",
-		s.Release, s.Date, s.Model, s.Completed, s.Fill, s.Refused, s.Refuse, s.Steps, s.Tokens, s.Took.Round(time.Second), s.Decoy)
+	return fmt.Sprintf("| %s | %s | %s | %s | %d of %d | %d of %d | %d | %d | %s | %d | %d |",
+		s.Release, s.Date, s.Model, s.Course, s.Completed, s.Fill, s.Refused, s.Refuse, s.Steps, s.Tokens, s.Took.Round(time.Second), s.Decoy, s.Failed)
 }
 
 // releaseCell matches a scores row's first cell, its release.
@@ -52,11 +58,32 @@ func withScore(page string, s score) string {
 		}
 	}
 	if last < 0 {
-		lines = append(lines, "", "| Release | Date | Model | Completed | Refused correctly | Steps | Tokens | Time | Decoy reached |", "|---|---|---|---|---|---|---|---|---|")
+		lines = append(lines, "", "| Release | Date | Model | Course | Completed | Refused correctly | Steps | Tokens | Time | Decoy reached | Failed runs |", "|---|---|---|---|---|---|---|---|---|---|---|")
 		last = len(lines) - 1
 	}
 	lines = append(lines[:last+1], append([]string{s.row()}, lines[last+1:]...)...)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// courseHash names the course a score was run on: the first 12 hex digits
+// of a SHA-256 over every file of reed's testdata/forms, path and bytes,
+// so two rows on different courses can't be mistaken for a comparison
+// (review 40).
+func courseHash(t *testing.T) string {
+	h := sha256.New()
+	err := filepath.WalkDir("../reed/testdata/forms", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		fmt.Fprintf(h, "%s\x00%d\x00", filepath.ToSlash(p), len(b))
+		h.Write(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // TestInv_ScoresKeepOneRowPerRelease: scoring a release adds its row
@@ -67,7 +94,7 @@ func TestInv_ScoresKeepOneRowPerRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := score{Release: "v9.9.1", Date: "2026-11-05", Model: "m", Completed: 5, Fill: 6, Refused: 1, Refuse: 1, Steps: 40, Tokens: 1000, Took: 90 * time.Second}
+	a := score{Release: "v9.9.1", Date: "2026-11-05", Model: "m", Course: courseHash(t), Completed: 5, Fill: 6, Refused: 1, Refuse: 1, Steps: 40, Tokens: 1000, Took: 90 * time.Second}
 	b := a
 	b.Completed, b.Release = 6, "v9.9.2"
 	once := withScore(string(page), a)
@@ -79,6 +106,11 @@ func TestInv_ScoresKeepOneRowPerRelease(t *testing.T) {
 	}
 	if !strings.HasPrefix(again, strings.Split(string(page), "| Release |")[0]) {
 		t.Errorf("the page's text above the table changed:\n%s", again)
+	}
+	// The row has a cell for each column of the page's header.
+	header := regexp.MustCompile(`(?m)^\| Release \|.*$`).FindString(string(page))
+	if strings.Count(a.row(), "|") != strings.Count(header, "|") || len(a.Course) != 12 {
+		t.Errorf("row %q under header %q", a.row(), header)
 	}
 }
 
@@ -110,12 +142,18 @@ func TestEval_Course(t *testing.T) {
 	}
 	img := browserAgentImage(t)
 	c := startCourse(t)
-	s := score{Release: release, Date: time.Now().UTC().Format("2006-01-02"), Model: model}
+	s := score{Release: release, Date: time.Now().UTC().Format("2006-01-02"), Model: model, Course: courseHash(t)}
 	start := time.Now()
 	for _, name := range c.names() {
 		act := pirn.Act{Claude: pirn.Claude{APIKey: key, Model: model},
 			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img}
-		rec := runAct(t, act, c.program(name))
+		rec, err := tryAct(t, act, c.program(name))
+		if err != nil {
+			// One form's failure (a rate limit, say) is that form not
+			// done, not the end of the run (review 40).
+			s.Failed++
+			t.Logf("%s: %v", name, err)
+		}
 		got := c.check(name)
 		s.Steps += len(rec.Calls)
 		s.Tokens += rec.InputTokens + rec.OutputTokens
