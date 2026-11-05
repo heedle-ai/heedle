@@ -80,7 +80,7 @@ It prints the proposal and a line for each thing it needs, ready or missing with
 
 ## Notifications
 
-While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
+While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. When a schedule's monthly budget stops a run, it tells you once that the schedule is paused and why, with the address of the schedules page, and again when a new month resumes it, if you ticked that. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
 
 ## Run programs from the terminal
 
@@ -118,6 +118,28 @@ Write a program on the home page, then **Schedule…** beside **Run**: give it a
 ```
 
 Temporal keeps the schedules, so they run while `heedle up` runs, and a run missed by under 10 minutes (your Mac asleep) still starts when it's back. "Every day" runs at the time of day you made it; use cron times for a set hour. A run that fails pauses its schedule, and the schedules page says why.
+
+## See what it costs
+
+Every Claude step records its model and the tokens Claude counted. The **costs** page shows this month and the six before it by model, the costliest runs and schedules, and an estimate in dollars; a run's page shows its tokens per step. Dollars are estimates (est.) from a built-in price table of a date, from [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing); a model with no price shows its tokens and no dollar figure. heedle isn't connected to your Anthropic account, so it never knows your bill. From the terminal:
+
+```sh
+./heedle costs -store ~/.heedle/store.git
+./heedle costs -store ~/.heedle/store.git -month 2026-11 -tz Europe/Lisbon
+```
+
+To correct a price, put the models you want to change in `~/.heedle/prices.json`, in dollars per million tokens; the rest keep the built-in prices, and a file heedle can't read is said and ignored:
+
+```sh
+printf '{"models": {"claude-sonnet-5-5": {"input": 2, "output": 10}}}\n' > ~/.heedle/prices.json
+```
+
+**Give a schedule a monthly budget** on the schedules page, or from the terminal. Before each run of it starts anything, the worker adds up the schedule's runs this month, in its time zone; at or over the budget, the run starts nothing and the schedule is paused, saying so, and you're told. Raise the budget to let it run again, or tick **resume in a new month**. A budget can't stop a run already going, so one run can go over it.
+
+```sh
+./heedle schedule -name weekday-digest -cron "0 9 * * 1-5" -tz Europe/Lisbon -budget 5 -resume-next-month '(pipe (echo "weekly digest") echo)'
+./heedle schedules -name weekday-digest -budget 10
+```
 
 ## Uninstall
 
