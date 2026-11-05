@@ -160,7 +160,7 @@ git init -b main ~/src/my-skills
 ./heedle skills publish trip-planner -repo ~/src/my-skills -store ~/.heedle/store.git
 ```
 
-It writes the skill's newest approved version to `skills/trip-planner/` with a row in `skills/README.md`, commits it with your git identity, and prints the push for you to run: heedle never pushes. It refuses a version still waiting for review, and a skill whose files look like they hold a key, naming the file and line. A skill's page has **Share**, which shows the same command filled in and, given your repository's link, the link a friend imports it with: `https://github.com/YOU/my-skills/tree/main/skills/trip-planner`.
+It writes the skill's newest approved version to `skills/trip-planner/` with a row in `skills/README.md`, commits it with your git identity, and prints the push for you to run, `git -C ~/src/my-skills push -u origin HEAD` (a local try has nothing to push to): heedle never pushes. It refuses a version still waiting for review, a skill whose files look like they hold a key (naming the file and line), and changes of your own in that skill's folder or the README. A skill's page has **Share**, which shows the same command filled in and, given your repository's link, the link a friend imports it with: `https://github.com/YOU/my-skills/tree/main/skills/trip-planner`.
 
 To import a friend's, paste that link on the **skills** page, or **Browse a repository** with their repository's link and pick one or several: each is imported from the commit you saw listed, and waits for your review if it asks for connectors or comes from a repository you don't trust. From the terminal:
 
