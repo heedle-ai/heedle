@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
+	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/heedle-ai/draft"
@@ -199,6 +205,11 @@ type move func(results []string) string
 // scripted is a stand-in Messages API that plays moves in order, then
 // ends with its last one (a text block).
 func scripted(t *testing.T, moves ...move) *httptest.Server {
+	return scriptedSeeing(t, nil, moves...)
+}
+
+// scriptedSeeing is scripted, keeping every request it was sent in seen.
+func scriptedSeeing(t *testing.T, seen *[]string, moves ...move) *httptest.Server {
 	var mu sync.Mutex
 	n := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +218,13 @@ func scripted(t *testing.T, moves ...move) *httptest.Server {
 				Content []map[string]any `json:"content"`
 			} `json:"messages"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+		if seen != nil {
+			mu.Lock()
+			*seen = append(*seen, string(body))
+			mu.Unlock()
+		}
 		var results []string
 		for _, m := range req.Messages {
 			for _, c := range m.Content {
@@ -485,4 +502,104 @@ func must(b []byte, err error) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// TestE2EProfile_LeavesNoValue is ci:e2e-course's run with the person's
+// details (roadmap 9.8): an act step that names them (:uses) fills the
+// course's contact form with a stand-in Claude that types placeholders,
+// and the form receives the real values; yet no value is anywhere in the
+// run's Git store, in what Temporal kept of the run (its result, every
+// activity's result and heartbeat), in the logs, or in any request to
+// Claude.
+func TestE2EProfile_LeavesNoValue(t *testing.T) {
+	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
+		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
+	}
+	img := browserAgentImage(t)
+	c := startCourse(t)
+	profile := map[string]string{"name": "Ada Lovelace", "email": "ada@example.org", "phone": "020 7946 0018"}
+	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
+	var toClaude []string
+	claude := scriptedSeeing(t, &toClaude, open(t, "contact"), snapshot(t),
+		fill(t, tb("Full name", "⟨name⟩"), tb("Email", "⟨email⟩"), tb("Phone", "⟨phone⟩"), tb("Message", "Please call me back.")),
+		snapshot(t), confirm("⟨name⟩, ⟨email⟩, ⟨phone⟩: please call me back."), click(t, `button "Send"`), say("Sent.\nResult: finished"))
+	asked := 0
+	act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
+		Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked),
+		Profile: func(_ context.Context, f string) (string, bool, error) { v, ok := profile[f]; return v, ok, nil }}
+	program := `(act "Send the contact form as me, asking to be called back." "http://forms-srv:8080/contact/" :uses "name email phone")`
+	var kept strings.Builder
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	reg := draft.DefaultRegistry()
+	var suite testsuite.WorkflowTestSuite
+	suite.SetLogger(tlog.NewStructuredLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetTestTimeout(pirn.ActBudget + 5*time.Minute)
+	env.SetOnActivityHeartbeatListener(func(_ *activity.Info, details converter.EncodedValues) {
+		var b pirn.ActBeat
+		details.Get(&b)
+		j, _ := json.Marshal(b)
+		kept.Write(j)
+	})
+	env.SetOnActivityCompletedListener(func(_ *activity.Info, result converter.EncodedValue, err error) {
+		var out any
+		if result != nil && result.HasValue() {
+			result.Get(&out)
+		}
+		j, _ := json.Marshal(out)
+		kept.Write(j)
+		if err != nil {
+			kept.WriteString(err.Error())
+		}
+	})
+	if err := pirn.RegisterAct(reg, env, act); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "store.git")
+	store, err := warp.Init(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loom.Register(env, store, reg)
+	p, err := loom.Compile(ctx, reg, program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.ExecuteWorkflow(loom.RunWorkflowName, loom.RunInput{Program: program, Plan: p, Ref: loom.DefaultRef})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	var res loom.RunResult
+	env.GetWorkflowResult(&res)
+	j, _ := json.Marshal(res)
+	kept.Write(j)
+	rec, ok := pirn.ParseAct(res.Outputs["n0"])
+	if !ok || rec.Ended != pirn.EndedFinished || asked != 1 || strings.Join(rec.Uses, " ") != "name email phone" {
+		t.Fatalf("record: %+v, asked %d", rec, asked)
+	}
+	// The form got the values.
+	got := c.check("contact").Received
+	if len(got) == 0 || !strings.Contains(got[len(got)-1], "name=Ada+Lovelace") || !strings.Contains(got[len(got)-1], "email=ada%40example.org") || !strings.Contains(got[len(got)-1], "phone=020+7946+0018") {
+		t.Fatalf("received %v", got)
+	}
+	// Every object in the store, uncompressed.
+	objects, err := exec.Command("git", "-C", dir, "cat-file", "--batch-all-objects", "--batch").Output()
+	if err != nil || len(objects) == 0 {
+		t.Fatalf("store: %v", err)
+	}
+	if kept.Len() == 0 || len(toClaude) == 0 {
+		t.Fatal("nothing was kept or sent: the search proves nothing")
+	}
+	for _, v := range profile {
+		for where, text := range map[string]string{"the store": string(objects), "Temporal": kept.String(), "the logs": logs.String(), "Claude's requests": strings.Join(toClaude, "\n")} {
+			if strings.Contains(text, v) || strings.Contains(text, url.QueryEscape(v)) {
+				t.Errorf("%q is in %s", v, where)
+			}
+		}
+	}
+	if !strings.Contains(string(objects), "⟨email⟩") {
+		t.Error("the record lost the placeholders")
+	}
 }
