@@ -151,14 +151,28 @@ func TestInv_DownTouchesOnlyThisHome(t *testing.T) {
 	os.Symlink(homeC, link)
 	for _, h := range []string{"rel/home", link} {
 		writeUpState(homeC, upState{PID: 1 << 22, Args: []string{"x"}, Home: h})
-		if st, err := readHomeState(homeC); err != nil || st == nil {
+		if st, err := readHomeState(ctx, sys, homeC); err != nil || st == nil {
 			t.Errorf("up.json naming this home as %q: %v", h, err)
+		}
+	}
+	// A relative Home with its heedle still running is this home's only
+	// if it is from the folder that heedle started in (round 3).
+	wd, _ := os.Getwd()
+	rel, _ := filepath.Rel(wd, homeC)
+	runningPID, runningArgs := standIn(t, false, "up", "-home", "x")
+	for _, c := range []struct {
+		home string
+		ok   bool
+	}{{rel, true}, {"elsewhere/home", false}} {
+		writeUpState(homeC, upState{PID: runningPID, Args: runningArgs, Home: c.home})
+		if st, err := readHomeState(ctx, system{goos: goos()}.withDefaults(io.Discard), homeC); (err == nil && st != nil) != c.ok {
+			t.Errorf("a relative Home %q with its heedle running: %v", c.home, err)
 		}
 	}
 	// Exact arguments: a database whose name only starts with this one's
 	// is another's.
 	db := filepath.Join(homeA, "temporal.db")
-	if !devServerOf("/t server start-dev --db-filename "+db, db) || devServerOf("/t server start-dev --db-filename "+db+"-x --port 1", db) || devServerOf("/t server start --db-filename "+db, db) {
+	if !devServerOf("/t server start-dev --db-filename "+db, homeA) || devServerOf("/t server start-dev --db-filename "+db+"-x --port 1", homeA) || devServerOf("/t server start --db-filename "+db, homeA) {
 		t.Error("devServerOf doesn't match whole arguments")
 	}
 }
@@ -276,7 +290,14 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 		t.Fatal("this test needs lsof, as heedle does to see which process answers on Temporal's port")
 	}
 	ownHomes(t)
-	real := system{goos: goos()}.withDefaults(io.Discard)
+	// The real machine, but no podman: this test never lists or removes
+	// a container.
+	real := system{goos: goos(), lookPath: func(name string) (string, error) {
+		if name == "podman" {
+			return "", errors.New("not here")
+		}
+		return exec.LookPath(name)
+	}}.withDefaults(io.Discard)
 
 	// heedle up stops the wrapper's child too.
 	home := t.TempDir()
@@ -356,6 +377,40 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, upFile)); err != nil {
 		t.Error("up.json went while Temporal still answers")
 	}
+	// Review 55 round 3: a home spelt through a link when heedle up ran
+	// is the same home spelt plainly: its Temporal is this home's,
+	// stopped by down and the clean start, never taken for another's.
+	for _, step := range []string{"down", "clean start"} {
+		home := t.TempDir()
+		link := filepath.Join(t.TempDir(), "link")
+		os.Symlink(home, link)
+		port := freePort(t)
+		self, _ := os.Executable()
+		argv := append([]string{self, "-test.run=^$", "--"}, temporalArgs(link)...)
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Env = append(os.Environ(), "HEEDLE_STANDIN=1", fmt.Sprintf("HEEDLE_STANDIN_LISTEN=%d", port))
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		for i := 0; i < 250 && !answersAt(port); i++ {
+			time.Sleep(20 * time.Millisecond)
+		}
+		st := upState{PID: 1 << 22, Args: []string{"/usr/local/bin/heedle", "up"}, Home: link, TemporalPort: port}
+		st.Temporal.PID, st.Temporal.Args, st.Temporal.Cmdline = cmd.Process.Pid, append([]string{"/usr/local/bin/temporal"}, temporalArgs(link)...), strings.Join(argv, " ")
+		writeUpState(home, st)
+		var out bytes.Buffer
+		var err error
+		if step == "down" {
+			err = down(ctx, []string{"-home", home}, &out, real)
+		} else {
+			err = cleanStart(ctx, home, real, &out)
+		}
+		if err != nil || running(cmd.Process.Pid) || strings.Contains(out.String(), "is another home's") {
+			t.Errorf("%s of a home spelt through a link: %v (its Temporal running %v)\n%s", step, err, running(cmd.Process.Pid), out.String())
+		}
+	}
+
 	// Review 55: a stale up.json (the machine restarted) whose port
 	// another home's Temporal now answers on doesn't hold this home back:
 	// down and the clean start say whose it is, leave it running, and
@@ -446,5 +501,23 @@ func TestInv_WikiSaysWhatHomesNeed(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("Getting-Started.md doesn't say %q", want)
 		}
+	}
+}
+
+// TestInv_TestsNeverReachTheMachinesPodman: unless a Podman end-to-end
+// test is asked for, the podman on the tests' PATH is one that refuses,
+// so no test can list or remove the machine's containers (HEEDLE-530,
+// review 55).
+func TestInv_TestsNeverReachTheMachinesPodman(t *testing.T) {
+	if os.Getenv("HEEDLE_E2E_IMAGES") != "" || os.Getenv("HEEDLE_E2E_ACT") != "" || os.Getenv("HEEDLE_E2E_HOMES") != "" {
+		t.Log("a Podman end-to-end test was asked for: the machine's podman is used, in its own store for two homes")
+		return
+	}
+	p, err := exec.LookPath("podman")
+	if err != nil {
+		return
+	}
+	if out, err := exec.Command(p, "ps").CombinedOutput(); err == nil || !strings.Contains(string(out), "never use the machine's podman") {
+		t.Errorf("the tests' podman (%s) is the machine's: %v\n%s", p, err, out)
 	}
 }

@@ -92,15 +92,53 @@ func sameDir(a, b string) bool {
 // readHomeState is home's up.json, if it is this home's: one copied from
 // another home (with the home folder, while it ran) names that home's
 // processes, so it is never acted on here (review 55).
-func readHomeState(home string) (*upState, error) {
+//
+// A Home written relatively (a heedle from before 9.2.1) is this home's
+// only if it is from the folder each recorded process still running
+// started in (lsof says), or if none still runs (review 55).
+func readHomeState(ctx context.Context, sys system, home string) (*upState, error) {
 	st, err := readUpState(home)
 	if err != nil || st == nil {
 		return st, err
 	}
-	if filepath.IsAbs(st.Home) && !sameDir(st.Home, home) {
-		return nil, fmt.Errorf("%s is %s's, not this home's: it was copied here, so heedle leaves it alone (remove it if that heedle isn't running)", filepath.Join(home, upFile), st.Home)
+	copied := fmt.Errorf("%s is %s's, not this home's: it was copied here, so heedle leaves it alone (remove it if that heedle isn't running)", filepath.Join(home, upFile), st.Home)
+	if filepath.IsAbs(st.Home) {
+		if !sameDir(st.Home, home) {
+			return nil, copied
+		}
+		return st, nil
+	}
+	for _, p := range []process{{st.PID, strings.Join(st.Args, " ")}, {st.Temporal.PID, st.temporalLine()}} {
+		if !isProcess(ctx, sys, p.PID, p.Cmdline) {
+			continue
+		}
+		cwd, err := cwdOf(ctx, sys, p.PID)
+		if err != nil {
+			return nil, fmt.Errorf("%s names its home relatively (%s), and heedle can't tell which folder pid %d started in (%v), so it leaves it alone", filepath.Join(home, upFile), st.Home, p.PID, err)
+		}
+		if !sameDir(filepath.Join(cwd, st.Home), home) {
+			return nil, copied
+		}
 	}
 	return st, nil
+}
+
+// cwdOf is the folder process pid runs in, as lsof reports it.
+func cwdOf(ctx context.Context, sys system, pid int) (string, error) {
+	lsof, err := sys.lookPath("lsof")
+	if err != nil {
+		return "", errors.New("lsof isn't on the PATH")
+	}
+	b, err := sys.output(ctx, lsof, "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn")
+	for _, l := range strings.Split(string(b), "\n") {
+		if d, ok := strings.CutPrefix(l, "n"); ok && filepath.IsAbs(d) {
+			return d, nil
+		}
+	}
+	if err == nil {
+		err = errors.New("lsof didn't say")
+	}
+	return "", err
 }
 
 func writeUpState(home string, st upState) error {
@@ -170,13 +208,12 @@ func (st *upState) temporalLine() string {
 // exactly the dev server heedle up started with home's database: heedle
 // ran it so, and the process still says so.
 func ourTemporal(ctx context.Context, sys system, st *upState, home string) bool {
-	db := filepath.Join(home, "temporal.db")
 	i := slices.Index(st.Temporal.Args, "--db-filename")
-	if i < 0 || i+1 >= len(st.Temporal.Args) || st.Temporal.Args[i+1] != db || !slices.Contains(st.Temporal.Args, "start-dev") {
+	if i < 0 || i+1 >= len(st.Temporal.Args) || !homeDB(st.Temporal.Args[i+1], home) || !slices.Contains(st.Temporal.Args, "start-dev") {
 		return false
 	}
 	line := st.temporalLine()
-	if !devServerOf(line, db) {
+	if !devServerOf(line, home) {
 		return false
 	}
 	return isProcess(ctx, sys, st.Temporal.PID, line)
@@ -190,18 +227,34 @@ func ourListener(ctx context.Context, sys system, st *upState, home string) bool
 	if l == nil || l.PID == st.Temporal.PID {
 		return false
 	}
-	if !devServerOf(l.Cmdline, filepath.Join(home, "temporal.db")) {
+	if !devServerOf(l.Cmdline, home) {
 		return false
 	}
 	return isProcess(ctx, sys, l.PID, l.Cmdline)
 }
 
 // devServerOf reports whether line, a command line as the system reports
-// it, is a dev server (start-dev) with exactly db as its database: whole
-// arguments, so .../temporal.db-x is another database (review 55).
-func devServerOf(line, db string) bool {
-	line += " "
-	return strings.Contains(line, " start-dev ") && strings.Contains(line, " --db-filename "+db+" ")
+// it, is a dev server (start-dev) with home's database (review 55).
+func devServerOf(line, home string) bool {
+	return strings.Contains(line+" ", " start-dev ") && homeDB(dbArg(line), home)
+}
+
+// dbArg is the --db-filename argument of line: up to the next flag, so a
+// path with spaces is read whole; "" without one.
+func dbArg(line string) string {
+	_, rest, ok := strings.Cut(line+" ", " --db-filename ")
+	if !ok {
+		return ""
+	}
+	db, _, _ := strings.Cut(rest, " --")
+	return strings.TrimSpace(db)
+}
+
+// homeDB reports whether db is home's database: a file temporal.db in
+// home's folder, however either is spelt (links resolved; review 55), so
+// .../temporal.db-x is another database.
+func homeDB(db, home string) bool {
+	return db != "" && filepath.Base(db) == "temporal.db" && filepath.IsAbs(db) && sameDir(filepath.Dir(db), home)
 }
 
 // errStillAnswers says something answers on Temporal's port that heedle
@@ -224,12 +277,8 @@ func othersTemporal(ctx context.Context, sys system, port int, home string) (str
 		return "", false
 	}
 	line, err := sys.procArgs(ctx, pid)
-	if err != nil || devServerOf(line, filepath.Join(home, "temporal.db")) {
-		return "", false
-	}
-	_, rest, ok := strings.Cut(line+" ", " --db-filename ")
-	db, _, _ := strings.Cut(rest, " ")
-	if !ok || !strings.Contains(line+" ", " start-dev ") || db == "" {
+	db := dbArg(line)
+	if err != nil || devServerOf(line, home) || !strings.Contains(line+" ", " start-dev ") || !filepath.IsAbs(db) {
 		return "", false
 	}
 	return db, true
@@ -304,7 +353,7 @@ func stopProcess(ctx context.Context, sys system, pid int, line string, wait tim
 // left is, it stops it. Anything else on Temporal's ports still fails, as
 // before.
 func cleanStart(ctx context.Context, home string, sys system, out io.Writer) error {
-	st, err := readHomeState(home)
+	st, err := readHomeState(ctx, sys, home)
 	if err != nil || st == nil {
 		return err
 	}
@@ -410,7 +459,7 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 	*home = absHome(*home)
 	var did []string
 	var still error
-	st, err := readHomeState(*home)
+	st, err := readHomeState(ctx, sys, *home)
 	if err != nil {
 		return err
 	}

@@ -25,6 +25,14 @@ func heedleBin(t *testing.T) string {
 	return bin
 }
 
+// noContainers is a folder holding a podman that has every image and no
+// containers, for end-to-end tests that need no Podman (HEEDLE-530).
+func noContainers(t *testing.T) string {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "podman"), []byte("#!/bin/sh\ncase \"$1\" in ps|images) echo '[]';; esac\nexit 0\n"), 0o755)
+	return dir
+}
+
 // heedleUp starts bin up with args and env, and waits until its UI
 // serves on listen.
 func heedleUp(t *testing.T, bin string, env []string, listen string, args ...string) (*exec.Cmd, *syncBuffer) {
@@ -71,7 +79,7 @@ func TestE2E_WrapperTemporalStops(t *testing.T) {
 	bin := heedleBin(t)
 	wrappers := t.TempDir()
 	os.WriteFile(filepath.Join(wrappers, "temporal"), []byte("#!/bin/sh\n'"+temporal+"' \"$@\"\n"), 0o755)
-	env := append(os.Environ(), "PATH="+wrappers+string(os.PathListSeparator)+os.Getenv("PATH"), "HOME="+t.TempDir())
+	env := append(os.Environ(), "PATH="+wrappers+string(os.PathListSeparator)+noContainers(t)+string(os.PathListSeparator)+os.Getenv("PATH"), "HOME="+t.TempDir())
 	home := t.TempDir()
 	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	port := freePort(t)

@@ -79,7 +79,7 @@ func runningHomes(ctx context.Context, sys system) []string {
 			continue
 		}
 		home := strings.TrimSpace(string(b))
-		st, err := readHomeState(home)
+		st, err := readHomeState(ctx, sys, home)
 		if err == nil && st != nil && st.homeLabel(home) == e.Name() &&
 			(isProcess(ctx, sys, st.PID, strings.Join(st.Args, " ")) || ourTemporal(ctx, sys, st, home) || ourListener(ctx, sys, st, home)) {
 			homes = append(homes, home)
