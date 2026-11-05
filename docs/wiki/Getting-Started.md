@@ -51,7 +51,7 @@ Press Ctrl-C to stop the UI, the worker and Temporal, or, from another terminal:
 ./heedle down
 ```
 
-Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down`. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
+Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down` and `heedle images`. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
 
 To see what heedle is running, and tidy up:
 

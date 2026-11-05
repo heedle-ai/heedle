@@ -60,10 +60,16 @@ func (im images) refs() []string { return []string{im.Browser, im.Agent, im.Brow
 func keptImages(flags, uiArgs []string) []string {
 	var out []string
 	for _, args := range [][]string{flags, uiArgs} {
-		for i := 0; i+1 < len(args); i++ {
-			switch strings.TrimLeft(args[i], "-") {
+		for i := 0; i < len(args); i++ {
+			name, value, inline := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+			switch name {
 			case "browser-image", "agent-image", "browser-agent-image":
-				out = append(out, args[i+1])
+				// -flag value, or -flag=value (HEEDLE-507).
+				if inline {
+					out = append(out, value)
+				} else if i+1 < len(args) {
+					out = append(out, args[i+1])
+				}
 			}
 		}
 	}
