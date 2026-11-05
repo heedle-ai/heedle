@@ -37,7 +37,7 @@ CI checks it end to end on Linux (`TestE2EAct_FillsAForm`, the `e2e-act` step): 
 HEEDLE_E2E_ACT=1 go test -count=1 -v -run TestE2EAct_FillsAForm .
 ```
 
-It uses the pinned image, downloading it if Podman doesn't have it, and fails if `images.json` pins none; `HEEDLE_E2E_ACT_IMAGE=<image ID>` uses another, such as one built with [reed → A browser-agent image](https://github.com/heedle-ai/reed/wiki/Getting-Started#6-a-browser-agent-image-for-act).
+It uses the pinned image, downloading it if Podman doesn't have it; `HEEDLE_E2E_ACT_IMAGE=<image ID>` uses another, such as one built with [reed → A browser-agent image](https://github.com/heedle-ai/reed/wiki/Getting-Started#6-a-browser-agent-image-for-act).
 
 ## Releases
 
