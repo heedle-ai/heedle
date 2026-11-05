@@ -58,7 +58,7 @@ Press Ctrl-C to stop the UI, the worker and Temporal, or, from another terminal:
 ./heedle down
 ```
 
-Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down` and `heedle images`. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
+Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down`, `heedle containers` and `heedle images`. Two homes can run at once, on other ports (`-listen`, `-temporal-port`, `-temporal-ui-port`); each one's `heedle down` stops only its own. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
 
 To see what heedle is running, and tidy up:
 
@@ -68,7 +68,7 @@ To see what heedle is running, and tidy up:
 ./heedle images -prune
 ```
 
-`containers` lists heedle's containers with their runs. `-stop WORKFLOW` stops a run through Temporal, and `-clean` removes the containers of runs that have ended. `images -prune` removes images that old releases left behind. The UI's **System** page shows the same.
+`containers` lists heedle's containers with their homes and runs. `-stop WORKFLOW -run RUN` stops that run through Temporal, and `-clean` removes this home's containers of runs that have ended. `images -prune` removes images that old releases left behind. The UI's **System** page shows the same.
 
 To give the UI drawdown's own flags, such as `-agent-image` or `-connectors`, put them after `--`. For example, to record runs on another history:
 

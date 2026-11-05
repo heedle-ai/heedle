@@ -22,6 +22,23 @@ import (
 // Temporal do), or, with HEEDLE_STANDIN_STUBBORN=1, ignores it.
 func TestMain(m *testing.M) {
 	if os.Getenv("HEEDLE_STANDIN") == "1" {
+		// With HEEDLE_STANDIN_LISTEN=PORT it also listens on that port,
+		// as Temporal does (roadmap 9.2.1).
+		if port := os.Getenv("HEEDLE_STANDIN_LISTEN"); port != "" {
+			l, err := net.Listen("tcp", "127.0.0.1:"+port)
+			if err != nil {
+				os.Exit(3)
+			}
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					c.Close()
+				}
+			}()
+		}
 		if os.Getenv("HEEDLE_STANDIN_STUBBORN") == "1" {
 			signal.Ignore(os.Interrupt)
 		} else {
@@ -32,7 +49,15 @@ func TestMain(m *testing.M) {
 		time.Sleep(5 * time.Minute)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	// No test says which homes run in the person's own ~/.heedle.
+	dir, err := os.MkdirTemp("", "heedle-homes-")
+	if err != nil {
+		panic(err)
+	}
+	homesDir = func() string { return dir }
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // standIn starts the test binary as a stand-in with the given arguments
@@ -71,11 +96,17 @@ func goos() string {
 }
 
 // running reports whether pid is alive, giving one just stopped a moment
-// to be reaped (a killed stand-in is a zombie until the test reaps it).
+// to be reaped (a killed stand-in is a zombie until the test reaps it). A
+// zombie, which reports no command line, has stopped: an orphan's may
+// never be reaped where the first process doesn't reap them.
 func running(pid int) bool {
+	sys := system{goos: goos()}.withDefaults(io.Discard)
 	for i := 0; i < 50; i++ {
 		p, err := os.FindProcess(pid)
 		if err != nil || p.Signal(syscall.Signal(0)) != nil {
+			return false
+		}
+		if line, err := sys.procArgs(ctx, pid); err == nil && line == "" {
 			return false
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -336,7 +367,7 @@ func TestInv_DownRemovesOnlyHeedlesContainers(t *testing.T) {
 	if !strings.Contains(string(b), "rm --force --time 0 --ignore "+strings.Repeat("a", 64)+"\n") || strings.Contains(string(b), strings.Repeat("b", 64)) {
 		t.Errorf("podman calls:\n%s", b)
 	}
-	if want := fmt.Sprintf("Stopped heedle (pid %d, http://127.0.0.1:8090) and its worker, with its Temporal; 1 of heedle's containers.\n", heedle); out.String() != want {
+	if want := fmt.Sprintf("Stopped heedle (pid %d, http://127.0.0.1:8090) and its worker, with its Temporal; 1 of this home's containers.\n", heedle); out.String() != want {
 		t.Errorf("down said %q, want %q", out.String(), want)
 	}
 }
@@ -356,7 +387,7 @@ func TestInv_ImagesKeepsTheReleasesPins(t *testing.T) {
 	for _, r := range append(pinned.refs(), "localhost/given:1") {
 		want = append(want, "-keep", r)
 	}
-	if got := keepArgs(defaultHome()); strings.Join(got, " ") != strings.Join(want, " ") {
+	if got := keepArgs(ctx, system{goos: goos()}.withDefaults(io.Discard), defaultHome()); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("keepArgs = %q", got)
 	}
 	// Review 50: -agent-image=X wasn't read as a pin, and heedle images
@@ -416,9 +447,13 @@ func TestE2E_KillThenUpThenDown(t *testing.T) {
 	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	port, uiPort := freePort(t), freePort(t)
 	args := []string{"up", "-home", home, "-listen", listen, "-notify=false", "-temporal-port", fmt.Sprint(port), "-temporal-ui-port", fmt.Sprint(uiPort)}
+	// heedle says which homes run in ~/.heedle/homes: a HOME of the
+	// test's own, never the person's.
+	env := append(os.Environ(), "HOME="+t.TempDir())
 	start := func() (*exec.Cmd, *syncBuffer) {
 		var out syncBuffer
 		cmd := exec.Command(bin, args...)
+		cmd.Env = env
 		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -452,6 +487,7 @@ func TestE2E_KillThenUpThenDown(t *testing.T) {
 	st2, _ := readUpState(home)
 	var down bytes.Buffer
 	cmd := exec.Command(bin, "down", "-home", home)
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = &down, &down
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("heedle down: %v\n%s", err, down.String())
