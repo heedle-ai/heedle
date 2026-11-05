@@ -80,6 +80,7 @@ type machine struct {
 	failServe error
 	missing   map[string]bool // images podman doesn't have
 	failPull  error
+	failInfo  error // podman info's error: Podman doesn't answer
 }
 
 // output answers as Podman would: its machine list, images it has, and
@@ -90,6 +91,9 @@ func (m *machine) output(_ context.Context, name string, args ...string) ([]byte
 	m.calls = append(m.calls, filepath.Base(name)+" "+strings.Join(args, " "))
 	if strings.Join(args, " ") == "machine list --format json" {
 		return []byte(m.machines), nil
+	}
+	if len(args) > 0 && args[0] == "info" && m.failInfo != nil {
+		return []byte("Error: " + m.failInfo.Error() + "\n"), errors.New("exit status 125")
 	}
 	if len(args) == 3 && args[0] == "image" && args[1] == "exists" && m.missing[args[2]] {
 		return nil, errors.New("exit status 1")
@@ -112,8 +116,9 @@ func (m *machine) system() system {
 			}
 			return "", errors.New("not found")
 		},
-		output:   m.output,
-		combined: m.output,
+		output:      m.output,
+		combined:    m.output,
+		podmanRetry: time.Millisecond,
 		temporal: func(_ context.Context, path string, args []string, _ io.Writer, hostPort string) (func() error, int, error) {
 			m.started, m.hostPort = append([]string{path}, args...), hostPort
 			return func() error { m.stopped++; return nil }, 0, nil
@@ -155,7 +160,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
-	if got := strings.Join(m.calls, "|"); got != "podman image exists "+pinned.Browser+"|podman image exists "+pinned.BrowserAgent {
+	if got := strings.Join(m.calls, "|"); got != "podman info --format {{.Host.Os}}|podman image exists "+pinned.Browser+"|podman image exists "+pinned.BrowserAgent {
 		t.Errorf("on Linux, heedle up ran %q", got)
 	}
 
@@ -225,6 +230,39 @@ func TestInv_UpPreparesPodmanOnMacOnly(t *testing.T) {
 	bad := &machine{goos: "darwin", machines: "not json", has: map[string]bool{"git": true, "podman": true, "temporal": true}}
 	if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, bad.system()); err == nil || bad.started != nil {
 		t.Errorf("an unreadable machine list: %v", err)
+	}
+}
+
+// TestInv_UpNeedsPodmanToAnswer: heedle up asks Podman itself, not
+// only its machine list, and refuses before starting anything when
+// Podman doesn't answer, saying how to restart the machine. A machine
+// that said it ran but refused connections (after the Mac slept) let
+// heedle start with no images, and every browse step failed with a
+// message about building images (Vinod, v0.2.4).
+func TestInv_UpNeedsPodmanToAnswer(t *testing.T) {
+	refused := errors.New("unable to connect to Podman socket: failed to connect: dial tcp 127.0.0.1:60675: connect: connection refused")
+	for _, c := range []struct{ goos, machines, want string }{
+		{"darwin", `[{"Name":"podman-machine-default","Default":true,"Running":true}]`, "podman machine stop podman-machine-default, then podman machine start podman-machine-default"},
+		{"darwin", `[{"Name":"podman-machine-default","Default":true,"Starting":true}]`, "podman machine stop podman-machine-default"},
+		{"linux", ``, "check podman info works"},
+	} {
+		m := &machine{goos: c.goos, machines: c.machines, failInfo: refused, has: map[string]bool{"git": true, "podman": true, "temporal": true}}
+		err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, m.system())
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "connection refused") {
+			t.Errorf("%s: Podman refusing: %v, want an error saying %q and why", c.goos, err, c.want)
+		}
+		if m.started != nil || m.served != nil {
+			t.Errorf("%s: started Temporal or the UI while Podman didn't answer", c.goos)
+		}
+		for _, call := range m.calls {
+			if strings.HasPrefix(call, "podman pull") {
+				t.Errorf("%s: pulled while Podman didn't answer: %s", c.goos, call)
+			}
+		}
+	}
+	ok := &machine{goos: "darwin", machines: `[{"Name":"podman-machine-default","Default":true,"Running":true}]`, has: map[string]bool{"git": true, "podman": true, "temporal": true}}
+	if err := up(ctx, []string{"-home", t.TempDir(), "-temporal-port", fmt.Sprint(freePort(t)), "-temporal-ui-port", fmt.Sprint(freePort(t))}, io.Discard, ok.system()); err != nil || ok.served == nil {
+		t.Errorf("Podman answering: %v", err)
 	}
 }
 
