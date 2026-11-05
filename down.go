@@ -37,11 +37,14 @@ type upState struct {
 	PID  int      `json:"pid"`  // heedle up's own process
 	Args []string `json:"args"` // its command line
 	Home string   `json:"home"`
-	// Temporal is the dev server heedle up started: its process ID and
-	// command line (the CLI's path, then its arguments).
+	// Temporal is the dev server heedle up started: its process ID, the
+	// command heedle ran (the CLI's path, then its arguments), and the
+	// command line the system then reported for it, which differs when
+	// the CLI on the PATH is a wrapper that runs the real one (HEEDLE-509).
 	Temporal struct {
-		PID  int      `json:"pid"`
-		Args []string `json:"args"`
+		PID     int      `json:"pid"`
+		Args    []string `json:"args"`
+		Cmdline string   `json:"cmdline,omitempty"`
 	} `json:"temporal"`
 	TemporalPort   int       `json:"temporalPort"`
 	TemporalUIPort int       `json:"temporalUIPort"`
@@ -92,39 +95,55 @@ func readProcArgs(ctx context.Context, sys system, pid int) (string, error) {
 	return strings.TrimSpace(string(b)), err
 }
 
-// isProcess reports whether pid is alive and still runs exactly args:
-// so a process ID reused by something else is never taken for heedle's.
-func isProcess(ctx context.Context, sys system, pid int, args []string) bool {
-	if pid <= 0 || len(args) == 0 || sys.signal(pid, syscall.Signal(0)) != nil {
+// isProcess reports whether pid is alive and still runs exactly line, its
+// command line as the system reports it: so a process ID reused by
+// something else is never taken for heedle's.
+func isProcess(ctx context.Context, sys system, pid int, line string) bool {
+	if pid <= 0 || line == "" || sys.signal(pid, syscall.Signal(0)) != nil {
 		return false
 	}
 	got, err := sys.procArgs(ctx, pid)
-	return err == nil && got == strings.Join(args, " ")
+	return err == nil && got == line
+}
+
+// temporalLine is st's Temporal's command line as the system reported it
+// once started; for an up.json written before that was recorded, the
+// command heedle ran.
+func (st *upState) temporalLine() string {
+	if st.Temporal.Cmdline != "" {
+		return st.Temporal.Cmdline
+	}
+	return strings.Join(st.Temporal.Args, " ")
 }
 
 // ourTemporal reports whether st's Temporal is still running, and is
-// exactly the dev server heedle up started with home's database.
+// exactly the dev server heedle up started with home's database: heedle
+// ran it so, and the process still says so.
 func ourTemporal(ctx context.Context, sys system, st *upState, home string) bool {
 	db := filepath.Join(home, "temporal.db")
 	i := slices.Index(st.Temporal.Args, "--db-filename")
 	if i < 0 || i+1 >= len(st.Temporal.Args) || st.Temporal.Args[i+1] != db || !slices.Contains(st.Temporal.Args, "start-dev") {
 		return false
 	}
-	return isProcess(ctx, sys, st.Temporal.PID, st.Temporal.Args)
+	line := st.temporalLine()
+	if !strings.Contains(line, " start-dev ") || !strings.Contains(line, " --db-filename "+db) {
+		return false
+	}
+	return isProcess(ctx, sys, st.Temporal.PID, line)
 }
 
-// stopProcess interrupts pid, which must still run args, and waits for it
+// stopProcess interrupts pid, which must still run line, and waits for it
 // to go: then, if kill, kills it. It reports whether it's gone.
-func stopProcess(ctx context.Context, sys system, pid int, args []string, wait time.Duration, kill bool) bool {
+func stopProcess(ctx context.Context, sys system, pid int, line string, wait time.Duration, kill bool) bool {
 	gone := func() bool {
 		deadline := time.Now().Add(wait)
 		for time.Now().Before(deadline) {
-			if !isProcess(ctx, sys, pid, args) {
+			if !isProcess(ctx, sys, pid, line) {
 				return true
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		return !isProcess(ctx, sys, pid, args)
+		return !isProcess(ctx, sys, pid, line)
 	}
 	_ = sys.signal(pid, os.Interrupt)
 	if gone() {
@@ -135,7 +154,7 @@ func stopProcess(ctx context.Context, sys system, pid int, args []string, wait t
 	if kill {
 		sig = os.Kill
 	}
-	if !isProcess(ctx, sys, pid, args) {
+	if !isProcess(ctx, sys, pid, line) {
 		return true
 	}
 	_ = sys.signal(pid, sig)
@@ -151,11 +170,11 @@ func cleanStart(ctx context.Context, home string, sys system, out io.Writer) err
 	if err != nil || st == nil {
 		return err
 	}
-	if isProcess(ctx, sys, st.PID, st.Args) {
+	if isProcess(ctx, sys, st.PID, strings.Join(st.Args, " ")) {
 		return fmt.Errorf("heedle is already running at %s; heedle down stops it", st.UI)
 	}
 	if ourTemporal(ctx, sys, st, home) {
-		if !stopProcess(ctx, sys, st.Temporal.PID, st.Temporal.Args, 15*time.Second, true) {
+		if !stopProcess(ctx, sys, st.Temporal.PID, st.temporalLine(), 15*time.Second, true) {
 			return fmt.Errorf("the Temporal a previous heedle up left running (pid %d) didn't stop", st.Temporal.PID)
 		}
 		fmt.Fprintf(out, "Stopped the Temporal a previous heedle up left running (pid %d).\n", st.Temporal.PID)
@@ -190,7 +209,10 @@ func plural(n int) string {
 
 // down stops what heedle up started from home: heedle up itself (which
 // stops its worker, UI and Temporal), Temporal if it outlived it, then
-// heedle's labelled containers. It says what it stopped.
+// heedle's labelled containers, but only if it found this home's heedle
+// or Temporal running: so heedle down for a home that isn't running never
+// removes the containers of a heedle running from another (HEEDLE-508).
+// It says what it stopped.
 func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 	sys = sys.withDefaults(out)
 	fs := flag.NewFlagSet("down", flag.ContinueOnError)
@@ -208,14 +230,14 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		return err
 	}
 	if st != nil {
-		if isProcess(ctx, sys, st.PID, st.Args) {
-			if !stopProcess(ctx, sys, st.PID, st.Args, time.Minute, false) {
+		if line := strings.Join(st.Args, " "); isProcess(ctx, sys, st.PID, line) {
+			if !stopProcess(ctx, sys, st.PID, line, time.Minute, false) {
 				return fmt.Errorf("heedle (pid %d) didn't stop", st.PID)
 			}
 			did = append(did, fmt.Sprintf("heedle (pid %d, %s) and its worker", st.PID, st.UI))
 		}
 		if ourTemporal(ctx, sys, st, *home) {
-			if !stopProcess(ctx, sys, st.Temporal.PID, st.Temporal.Args, 15*time.Second, true) {
+			if !stopProcess(ctx, sys, st.Temporal.PID, st.temporalLine(), 15*time.Second, true) {
 				return fmt.Errorf("Temporal (pid %d) didn't stop", st.Temporal.PID)
 			}
 			did = append(did, fmt.Sprintf("Temporal (pid %d)", st.Temporal.PID))
@@ -226,6 +248,10 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 			return err
 		}
 	}
+	if len(did) == 0 {
+		fmt.Fprintln(out, "Nothing of heedle's was running.")
+		return nil
+	}
 	if podman, err := sys.lookPath("podman"); err == nil {
 		gone, err := bobbin.Runner{Podman: podman}.Remove(ctx, func(bobbin.Container) bool { return true })
 		if err != nil {
@@ -234,10 +260,6 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		if len(gone) > 0 {
 			did = append(did, fmt.Sprintf("%d of heedle's containers", len(gone)))
 		}
-	}
-	if len(did) == 0 {
-		fmt.Fprintln(out, "Nothing of heedle's was running.")
-		return nil
 	}
 	fmt.Fprintf(out, "Stopped %s.\n", strings.Join(did, "; "))
 	return nil

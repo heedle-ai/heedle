@@ -258,6 +258,12 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	st := upState{PID: os.Getpid(), Args: os.Args, Home: *home, TemporalPort: *port, TemporalUIPort: *uiPort, UI: "http://" + *listen,
 		Keep: keptImages(images, uiArgs), Started: time.Now().UTC()}
 	st.Temporal.PID, st.Temporal.Args = tpid, append([]string{temporal}, targs...)
+	// The command line the system reports for it, which is what heedle
+	// down and the next heedle up match: a temporal on the PATH that is a
+	// wrapper runs the real one under another (HEEDLE-509).
+	if line, err := sys.procArgs(ctx, tpid); err == nil && line != "" {
+		st.Temporal.Cmdline = line
+	}
 	if err := writeUpState(*home, st); err != nil {
 		stop()
 		return err

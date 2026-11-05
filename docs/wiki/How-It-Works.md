@@ -6,7 +6,7 @@ heedle is three existing programs in one binary, plus `heedle up` and `heedle do
 |---|---|
 | `heedle up` | Temporal's dev server, then a loom worker and the drawdown UI (below) |
 | `heedle down` | stops what `heedle up` started, and heedle's containers ([below](#heedle-down-and-a-clean-start)) |
-| `heedle images` | loom's `images`, keeping the images this release pins and those `heedle up` gave its worker |
+| `heedle images` | loom's `images`, keeping the images this release pins and those `heedle up` gave its worker (`-home` names its home) |
 | `heedle ui -store DIR ...` | drawdown with its own flags (`drawdown/app.Run`) |
 | `heedle COMMAND ...` | any loom command, unchanged (`loom/cli.Run`) |
 | `heedle version` | the version GoReleaser stamped in, or `dev` |
@@ -29,13 +29,13 @@ In order:
 
 ## heedle down, and a clean start
 
-`heedle up` records what it started in `~/.heedle/up.json` (roadmap 9.2). The file holds its own process ID and command line, Temporal's process ID and command line (with this home's database), the ports, the UI's address, and the images it gave the worker. heedle removes the file once Temporal has stopped. heedle stops a process only if it is still exactly the one `up.json` records: the same process ID, running the same command line, and for Temporal, this home's database. Anything else on the port, or now under that process ID, is left alone.
+`heedle up` records what it started in `~/.heedle/up.json` (roadmap 9.2). The file holds its own process ID and command line, Temporal's process ID, the command heedle ran it with (with this home's database) and the command line the system reported for it once it started, the ports, the UI's address, and the images it gave the worker. heedle removes the file once Temporal has stopped. heedle stops a process only if it is still exactly the one `up.json` records: the same process ID, running the same command line, and for Temporal, a dev server with this home's database. Temporal is matched on the command line the system reported, so a `temporal` on the PATH that is a wrapper running the real CLI is still recognised. Anything else on the port, or now under that process ID, is left alone.
 
 ```sh
 ./heedle down
 ```
 
-`heedle down` interrupts that `heedle up`, which stops its UI, its worker and Temporal as Ctrl-C does. If Temporal outlived it, `heedle down` stops Temporal too, killing it if it won't stop. Then it removes heedle's containers: every container on this machine labelled `heedle.kind`, a separate `loom worker`'s included, and nothing else. It says what it stopped, or that nothing of heedle's was running.
+`heedle down` interrupts that `heedle up`, which stops its UI, its worker and Temporal as Ctrl-C does. If Temporal outlived it, `heedle down` stops Temporal too, killing it if it won't stop. Then it removes heedle's containers: every container on this machine labelled `heedle.kind`, a separate `loom worker`'s included, and nothing else. It does that only if it found this home's heedle or Temporal running, so `heedle down` for a home that isn't running never touches the containers of a heedle running from another home. Labels don't say which home a container's run belongs to, so if heedles from two homes run at once, stopping either removes the containers of both. It says what it stopped, or that nothing of heedle's was running.
 
 `heedle up` starts by reading `up.json`:
 

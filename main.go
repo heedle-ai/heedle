@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/heedle-ai/drawdown/app"
@@ -37,7 +38,7 @@ const usage = `usage:
   heedle containers [-stop WORKFLOW | -clean]
                        heedle's containers and their runs; stop a run, or
                        remove the containers of runs that have ended
-  heedle images [-prune]
+  heedle images [-home DIR] [-prune]
                        heedle's images; remove the ones this release
                        doesn't pin and no container uses
   heedle ui -store DIR [FLAGS]
@@ -78,7 +79,11 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	case "images":
 		// loom's images, keeping this release's pins and what heedle up
 		// gave its worker.
-		return cli.Run(ctx, append(append([]string{"images"}, keepArgs(defaultHome())...), args[1:]...), out)
+		home, rest, err := homeArg(args[1:])
+		if err != nil {
+			return err
+		}
+		return cli.Run(ctx, append(append([]string{"images"}, keepArgs(home)...), rest...), out)
 	case "ui":
 		return app.Run(ctx, args[1:], out)
 	case "version", "-version", "--version":
@@ -89,6 +94,33 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return nil
 	}
 	return cli.Run(ctx, args, out)
+}
+
+// homeArg takes heedle images' -home (the home heedle up was started
+// with; the default if none) out of its arguments, leaving loom's
+// (HEEDLE-507).
+func homeArg(args []string) (string, []string, error) {
+	home, rest := defaultHome(), []string{}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		name, value, inline := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+		if name != "home" || !strings.HasPrefix(args[i], "-") {
+			rest = append(rest, args[i])
+			continue
+		}
+		if !inline {
+			if i+1 >= len(args) {
+				return "", nil, errors.New("-home needs a directory")
+			}
+			i++
+			value = args[i]
+		}
+		home = value
+	}
+	return home, rest, nil
 }
 
 // keepArgs are -keep flags for the images heedle images never prunes:

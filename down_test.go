@@ -108,6 +108,12 @@ func TestInv_UpRecordsWhatItStarted(t *testing.T) {
 		seen = st
 		return serve(c2, args, out)
 	}
+	sys.procArgs = func(_ context.Context, pid int) (string, error) {
+		if pid != 4242 {
+			return "", errors.New("no such process")
+		}
+		return "/opt/temporal/real-temporal server start-dev --db-filename " + filepath.Join(home, "temporal.db"), nil
+	}
 	sys.temporal = func(_ context.Context, path string, args []string, _ io.Writer, _ string) (func() error, int, error) {
 		m.started = append([]string{path}, args...)
 		return func() error {
@@ -125,6 +131,9 @@ func TestInv_UpRecordsWhatItStarted(t *testing.T) {
 		seen.Temporal.PID != 4242 || strings.Join(seen.Temporal.Args, " ") != strings.Join(m.started, " ") ||
 		seen.TemporalPort != port || seen.TemporalUIPort != uiPort || seen.UI != "http://127.0.0.1:9000" || strings.Join(seen.Keep, " ") != "mine" {
 		t.Errorf("up.json while serving: %+v", seen)
+	}
+	if seen.Temporal.Cmdline != "/opt/temporal/real-temporal server start-dev --db-filename "+filepath.Join(home, "temporal.db") {
+		t.Errorf("up.json's Temporal command line is %q, not what the system reported", seen.Temporal.Cmdline)
 	}
 	if !strings.Contains(strings.Join(seen.Temporal.Args, " "), "--db-filename "+filepath.Join(home, "temporal.db")) {
 		t.Errorf("up.json's Temporal hasn't this home's database: %q", seen.Temporal.Args)
@@ -199,6 +208,33 @@ func TestInv_OnlyHeedlesOwnProcessesAreStopped(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, upFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Error("up.json outlived heedle down")
 	}
+	// Review 50: a temporal on the PATH that is a wrapper runs the real
+	// one under another command line, which heedle up now records, and
+	// which is what's matched (HEEDLE-509).
+	wrapped, wrappedLine := standIn(t, false, temporalArgs(home)...)
+	st = upState{PID: 1 << 22, Args: []string{"/usr/local/bin/heedle", "up"}, UI: "http://127.0.0.1:8090"}
+	st.Temporal.PID, st.Temporal.Args, st.Temporal.Cmdline = wrapped, append([]string{"/opt/wrappers/temporal"}, temporalArgs(home)...), strings.Join(wrappedLine, " ")
+	write(st)
+	out.Reset()
+	if err := down(ctx, []string{"-home", home}, &out, sys); err != nil {
+		t.Fatal(err)
+	}
+	if running(wrapped) || !strings.Contains(out.String(), fmt.Sprintf("Temporal (pid %d)", wrapped)) {
+		t.Errorf("down left the Temporal a wrapper started (running %v):\n%s", running(wrapped), out.String())
+	}
+	// A recorded command line without this home's database, or that isn't
+	// a dev server, is never taken for heedle's Temporal.
+	for _, line := range [][]string{temporalArgs(other), {"server", "start", "--db-filename", filepath.Join(home, "temporal.db")}} {
+		p, pLine := standIn(t, false, line...)
+		st.Temporal.PID, st.Temporal.Cmdline = p, strings.Join(pLine, " ")
+		write(st)
+		if err := down(ctx, []string{"-home", home}, io.Discard, sys); err != nil || !running(p) {
+			t.Errorf("down stopped %q: %v", pLine, err)
+		}
+	}
+	st = upState{PID: heedle, Args: heedleArgs, UI: "http://127.0.0.1:8090"}
+	st.Temporal.PID, st.Temporal.Args = ours, oursArgs
+
 	// A process ID that has gone is left alone.
 	write(st)
 	out.Reset()
@@ -269,17 +305,39 @@ func TestInv_DownRemovesOnlyHeedlesContainers(t *testing.T) {
 			return podman, nil
 		}
 		return "", errors.New("not found")
-	}}
+	}}.withDefaults(io.Discard)
+	// Review 50: heedle down for a home with nothing running removed the
+	// containers of a heedle running from another home (HEEDLE-508).
 	var out bytes.Buffer
 	if err := down(ctx, []string{"-home", t.TempDir()}, &out, sys); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(log); len(b) != 0 || out.String() != "Nothing of heedle's was running.\n" {
+		t.Errorf("down with nothing of this home's running: %q; podman calls:\n%s", out.String(), b)
+	}
+	home := t.TempDir()
+	stale := upState{PID: 1 << 22, Args: []string{"/usr/local/bin/heedle", "up"}, Home: home, UI: "http://127.0.0.1:8090"}
+	writeUpState(home, stale)
+	if err := down(ctx, []string{"-home", home}, &out, sys); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(log); len(b) != 0 {
+		t.Errorf("down with a stale up.json ran podman:\n%s", b)
+	}
+	// This home's heedle is running: down stops it, then removes heedle's
+	// containers, and only heedle's.
+	heedle, heedleArgs := standIn(t, false, "up", "-home", home)
+	writeUpState(home, upState{PID: heedle, Args: heedleArgs, Home: home, UI: "http://127.0.0.1:8090"})
+	out.Reset()
+	if err := down(ctx, []string{"-home", home}, &out, sys); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
 	if !strings.Contains(string(b), "rm --force --time 0 --ignore "+strings.Repeat("a", 64)+"\n") || strings.Contains(string(b), strings.Repeat("b", 64)) {
 		t.Errorf("podman calls:\n%s", b)
 	}
-	if out.String() != "Stopped 1 of heedle's containers.\n" {
-		t.Errorf("down said %q", out.String())
+	if want := fmt.Sprintf("Stopped heedle (pid %d, http://127.0.0.1:8090) and its worker, with its Temporal; 1 of heedle's containers.\n", heedle); out.String() != want {
+		t.Errorf("down said %q, want %q", out.String(), want)
 	}
 }
 
@@ -301,7 +359,31 @@ func TestInv_ImagesKeepsTheReleasesPins(t *testing.T) {
 	if got := keepArgs(defaultHome()); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("keepArgs = %q", got)
 	}
+	// Review 50: -agent-image=X wasn't read as a pin, and heedle images
+	// knew only the default home (HEEDLE-507).
+	if got := keptImages([]string{"-browser-image", "a:1"}, []string{"-agent-image=b:1", "--browser-agent-image=c:1", "-store", "x", "-agent-image"}); strings.Join(got, " ") != "a:1 b:1 c:1" {
+		t.Errorf("keptImages = %q", got)
+	}
+	other := t.TempDir()
+	writeUpState(other, upState{Keep: []string{"localhost/other:1"}})
+	for _, args := range [][]string{{"-home", other, "-prune"}, {"-home=" + other, "-prune"}, {"--home", other, "-prune"}} {
+		h, rest, err := homeArg(args)
+		if err != nil || h != other || strings.Join(rest, " ") != "-prune" {
+			t.Errorf("homeArg(%q) = %q, %q, %v", args, h, rest, err)
+		}
+	}
+	if h, rest, _ := homeArg([]string{"-prune"}); h != defaultHome() || strings.Join(rest, " ") != "-prune" {
+		t.Errorf("homeArg with no -home = %q, %q", h, rest)
+	}
+	if _, _, err := homeArg([]string{"-home"}); err == nil {
+		t.Error("-home with no directory was taken")
+	}
 	var out bytes.Buffer
+	if err := run(ctx, []string{"images", "-home", other}, &out); err != nil || !strings.Contains(out.String(), "pirn-agent") {
+		t.Errorf("heedle images -home: %v\n%s", err, out.String())
+	}
+	os.Remove(log)
+	out.Reset()
 	if err := run(ctx, []string{"images", "-prune"}, &out); err != nil {
 		t.Fatal(err)
 	}
