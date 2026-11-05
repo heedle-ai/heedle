@@ -164,7 +164,7 @@ func watch(ctx context.Context, sys system, hostPort, queue, base string, out io
 				show("heedle: "+strconv.Itoa(len(notices)-maxShown)+" more", "Scheduled runs ended or writes wait for you. "+base)
 				break
 			}
-			show(n.Title, n.Body+" "+base+"/#/run/"+url.PathEscape(n.Workflow)+"/"+url.PathEscape(n.Run))
+			show(n.Title, n.Body+" "+noticeLink(base, n))
 		}
 	}
 }
@@ -426,4 +426,14 @@ func queueOf(uiArgs []string) string {
 		}
 	}
 	return "loom"
+}
+
+// noticeLink is where a notice's link goes: a run's page, or, for a
+// notice about a schedule itself (its budget paused it, or a new month
+// resumed it: roadmap 10.4), the Schedules page.
+func noticeLink(base string, n loom.Notice) string {
+	if n.Schedule != "" {
+		return base + "/#/schedules"
+	}
+	return base + "/#/run/" + url.PathEscape(n.Workflow) + "/" + url.PathEscape(n.Run)
 }

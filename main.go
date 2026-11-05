@@ -8,7 +8,7 @@
 //	heedle ask "REQUEST"           ask for something; heedle proposes how
 //	heedle run PROGRAM ...         any loom command: run, compile, worker, write,
 //	                               ask, writes, skills, branch, merge, beliefs,
-//	                               secret, schedule, schedules
+//	                               secret, schedule, schedules, costs
 //	heedle version
 package main
 
@@ -48,8 +48,8 @@ const usage = `usage:
                        schedules it if you say so
   heedle COMMAND ...   a loom command: run, compile, worker, write, ask,
                        writes, skills, branch, merge, beliefs, secret,
-                       memory, schedule, schedules (heedle COMMAND -h for
-                       its flags)
+                       memory, schedule, schedules, costs (heedle COMMAND -h
+                       for its flags)
   heedle version`
 
 func main() {

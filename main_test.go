@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/heedle-ai/loom"
 )
 
 var ctx = context.Background()
@@ -507,9 +509,12 @@ func TestE2E_Up(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	// A schedule, on a real Temporal: made from the UI, run now, its run
-	// recorded like any other, then deleted (roadmap 7.3).
+	// A schedule, on a real Temporal: made from the UI, given a monthly
+	// budget there (roadmap 10.4: the worker checks it before the run, so
+	// it must have the budget check and Temporal's schedules), run now,
+	// its run recorded like any other, then deleted (roadmap 7.3).
 	post("/api/schedules", `{"name":"e2e-digest","program":"(pipe (echo \"scheduled\") echo)","every":"24h"}`)
+	post("/api/schedules/e2e-digest/budget", `{"usd":5,"resumeNextMonth":true}`)
 	post("/api/schedules/e2e-digest/run", `{}`)
 	scheduled := ""
 	for scheduled == "" {
@@ -568,6 +573,17 @@ func TestE2E_Up(t *testing.T) {
 		t.Errorf("notifications: %q", notes.String())
 	}
 	var sched bytes.Buffer
+	if err := run(c, []string{"schedules", "-address", address}, &sched); err != nil || !strings.Contains(sched.String(), "budget $5.00 a month, resumed by a new month") {
+		t.Errorf("heedle schedules: %v\n%s", err, sched.String())
+	}
+	// heedle costs reads the same store: the scheduled run asked Claude
+	// nothing.
+	var costs bytes.Buffer
+	if err := run(c, []string{"costs", "-store", filepath.Join(home, "store.git"), "-prices", filepath.Join(home, "prices.json")}, &costs); err != nil ||
+		!strings.Contains(costs.String(), "no runs asked Claude this month") {
+		t.Errorf("heedle costs: %v\n%s", err, costs.String())
+	}
+	sched.Reset()
 	if err := run(c, []string{"schedules", "-address", address, "-delete", "e2e-digest"}, &sched); err != nil {
 		t.Errorf("heedle schedules -delete: %v\n%s", err, sched.String())
 	}
@@ -673,5 +689,20 @@ func TestE2EImages_Browse(t *testing.T) {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		t.Fatal("heedle up kept running after it was stopped")
+	}
+}
+
+// TestInv_BudgetNoticesOpenTheSchedules: a notice about a schedule itself
+// (its budget paused it, or a new month resumed it) links to the
+// Schedules page, where its budget is; a run's notice to the run.
+// (Roadmap 10.4.)
+func TestInv_BudgetNoticesOpenTheSchedules(t *testing.T) {
+	base := "http://127.0.0.1:8090"
+	paused := loom.Notice{Key: "run:wf/r", Title: "heedle: news paused", Workflow: "loom-x-2026", Run: "r", Schedule: "news"}
+	if got := noticeLink(base, paused); got != base+"/#/schedules" {
+		t.Errorf("budget pause: %s", got)
+	}
+	if got := noticeLink(base, loom.Notice{Workflow: "loom-x/2026", Run: "r 1"}); got != base+"/#/run/loom-x%2F2026/r%201" {
+		t.Errorf("run: %s", got)
 	}
 }
