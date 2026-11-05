@@ -294,10 +294,13 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 		stop()
 		return err
 	}
+	// Other homes must see this one, or their prunes could remove its
+	// images: a home that can't say it runs doesn't start (review 55).
 	unregister, err := registerHome(*home, st.HomeLabel)
 	if err != nil {
-		fmt.Fprintf(out, "Couldn't say this home runs (%v): heedle down and heedle images for another home won't know.\n", err)
-		unregister = func() {}
+		stop()
+		os.Remove(filepath.Join(*home, upFile))
+		return fmt.Errorf("saying this home runs, in %s: %w", homesDir(), err)
 	}
 	defer func() {
 		// A wrapper's child first: the wrapper then ends as it does.
@@ -325,12 +328,12 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 	// The connectors file lives in the home too (a -connectors after --
 	// wins); it needn't exist until there is a connector.
 	return sys.serve(ctx, append([]string{"-store", store, "-address", hostPort, "-temporal-ui", "http://" + temporalUI, "-listen", *listen,
-		"-connectors", filepath.Join(*home, "connectors.json"), "-keep-images", strings.Join(pinned.refs(), ",")}, append(images, uiArgs...)...), out)
+		"-connectors", filepath.Join(*home, "connectors.json"), "-homes", homesDir(), "-keep-images", strings.Join(pinned.refs(), ",")}, append(images, uiArgs...)...), out)
 }
 
 // ownFlags are drawdown's flags heedle up sets; passing them after --
 // would quietly point the UI at another store or Temporal.
-var ownFlags = map[string]bool{"store": true, "address": true, "temporal-ui": true, "listen": true}
+var ownFlags = map[string]bool{"store": true, "address": true, "temporal-ui": true, "listen": true, "homes": true}
 
 // TemporalReady bounds how long Temporal's dev server may take to answer.
 var TemporalReady = time.Minute

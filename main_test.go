@@ -156,7 +156,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.started, " ") != wantStart || m.hostPort != address {
 		t.Errorf("Temporal started as %q at %s", m.started, m.hostPort)
 	}
-	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-keep-images", strings.Join(pinned.refs(), ","), "-browser-image", pinned.Browser, "-browser-agent-image", pinned.BrowserAgent, "-agent-image", "abc"}
+	want := []string{"-store", filepath.Join(home, "store.git"), "-address", address, "-temporal-ui", fmt.Sprintf("http://127.0.0.1:%d", uiPort), "-listen", "127.0.0.1:9000", "-connectors", filepath.Join(home, "connectors.json"), "-homes", homesDir(), "-keep-images", strings.Join(pinned.refs(), ","), "-browser-image", pinned.Browser, "-browser-agent-image", pinned.BrowserAgent, "-agent-image", "abc"}
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
@@ -186,6 +186,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 		{map[string]bool{"git": true, "temporal": true}, []string{"stray"}, "unexpected"},
 		{map[string]bool{"git": true, "temporal": true}, []string{"--", "-store", "/elsewhere"}, "sets -store"},
 		{map[string]bool{"git": true, "temporal": true}, []string{"--", "--address=x:1"}, "sets -address"},
+		{map[string]bool{"git": true, "temporal": true}, []string{"--", "-homes", "/elsewhere"}, "sets -homes"},
 	} {
 		m := &machine{goos: "linux", has: c.has}
 		err := up(ctx, append(append([]string{"-home", home}, ports...), c.args...), io.Discard, m.system())
@@ -313,7 +314,7 @@ func TestInv_UpGivesTheWorkerImages(t *testing.T) {
 		if err := up(ctx, args, &out, m.system()); err != nil {
 			t.Fatal(err)
 		}
-		return strings.Join(m.served[12:], " "), out.String()
+		return strings.Join(m.served[14:], " "), out.String()
 	}
 	has := map[string]bool{"git": true, "podman": true, "temporal": true}
 

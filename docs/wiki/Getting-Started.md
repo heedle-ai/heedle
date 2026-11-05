@@ -8,6 +8,7 @@ heedle runs on Linux (amd64, arm64) and on macOS on Apple Silicon.
 - Git 2.42 or later.
 - [Podman](https://podman.io), for `container`, `agent` and `browse` steps. Programs without those steps run without it. On macOS, `heedle up` creates and starts Podman's virtual machine for you. On first run, on macOS and Linux, it downloads the ready-made browser and agent images it gives its worker (see [How It Works](How-It-Works#heedle-up)).
 - The [Temporal CLI](https://docs.temporal.io/cli), on the PATH: `brew install temporal` on macOS, or `curl -sSf https://temporal.download/cli.sh | sh` on Linux.
+- `lsof`, on the PATH (macOS has it; on Debian and Ubuntu, `sudo apt install lsof`), so `heedle up` can see which process answers on Temporal's port when your `temporal` is a wrapper script, and `heedle down` can stop it. Without it, `heedle down` still never says Temporal stopped while something answers on its port.
 - For `ask` and `agent` steps, an Anthropic API key: stored once with `heedle secret set ANTHROPIC_API_KEY`, or in `ANTHROPIC_API_KEY` where heedle runs. On Linux the keychain needs `secret-tool` (`libsecret-tools` on Debian and Ubuntu) and a running secret service such as GNOME Keyring.
 
 ## Build it
@@ -58,7 +59,7 @@ Press Ctrl-C to stop the UI, the worker and Temporal, or, from another terminal:
 ./heedle down
 ```
 
-Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down`, `heedle containers` and `heedle images`. Two homes can run at once, on other ports (`-listen`, `-temporal-port`, `-temporal-ui-port`); each one's `heedle down` stops only its own. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
+Runs, skills and Temporal's history are kept in `~/.heedle`; give `-home DIR` to keep them elsewhere, and the same `-home` to `heedle down`, `heedle containers` and `heedle images`. Two homes can run at once, on other ports (`-listen`, `-temporal-port`, `-temporal-ui-port`); each one's `heedle down` stops only its own. Give each its own `-home` rather than its own `HOME`: running homes find each other in `~/.heedle/homes`, under your `HOME`. If heedle was killed and left Temporal running, the next `./heedle up` stops that Temporal and says so.
 
 To see what heedle is running, and tidy up:
 

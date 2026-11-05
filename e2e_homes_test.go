@@ -94,12 +94,13 @@ func TestE2E_WrapperTemporalStops(t *testing.T) {
 // TestE2EHomes_TwoAtOnce: for real, heedle up from two homes at once,
 // each with its own Temporal, worker and a container step running, in a
 // Podman store of the test's own (so nothing else's containers are ever
-// seen); and a container from before homes were labelled. heedle
+// seen); and containers from before homes were labelled. heedle
 // containers shows each home and marks this one's; heedle images -prune,
 // for neither home, keeps what B's heedle up gave its worker; heedle down
-// for A removes A's container and stops A's Temporal, leaving B's
-// container, Temporal and UI running, and the old container, saying so;
-// then heedle down for B removes B's and the old one (HEEDLE-524,
+// for A removes A's container and the old one of A's run, and stops A's
+// Temporal, leaving B's container, Temporal and UI running, and the old
+// container of no known run, saying so; then heedle down for B removes
+// B's and still leaves that one (HEEDLE-524,
 // roadmap 9.2.1). CI's e2e-homes step runs it with HEEDLE_E2E_HOMES=1 on
 // Linux, where Podman runs.
 func TestE2EHomes_TwoAtOnce(t *testing.T) {
@@ -235,7 +236,13 @@ func TestE2EHomes_TwoAtOnce(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	// A container from before homes were labelled.
+	// Containers from before homes were labelled: one of a run A's
+	// Temporal knows (A's step's run), and one of no run at all.
+	runOfA := strings.Fields(pod("ps", "--filter", "label=heedle.home="+a.label, "--format", `{{index .Labels "heedle.workflow"}} {{index .Labels "heedle.run"}}`))
+	if len(runOfA) != 2 {
+		t.Fatalf("A's container's run labels: %q", runOfA)
+	}
+	pod("run", "-d", "--network=none", "--label", "heedle.kind=container", "--label", "heedle.workflow="+runOfA[0], "--label", "heedle.run="+runOfA[1], sleep, "600")
 	pod("run", "-d", "--network=none", "--label", "heedle.kind=container", sleep, "600")
 
 	out, err := heedleRun(t, bin, env, "containers", "-home", a.dir)
@@ -253,8 +260,9 @@ func TestE2EHomes_TwoAtOnce(t *testing.T) {
 
 	out, err = heedleRun(t, bin, env, "down", "-home", a.dir)
 	a.cmd.Wait()
-	// A's own container may already have gone with its worker's step.
-	if err != nil || !strings.Contains(out, "Left 1 container from before heedle labelled homes, since heedle runs from another home too ("+b.dir+")") {
+	// The old container of A's run goes with A's; the one no Temporal
+	// knows stays, and down says so.
+	if err != nil || !strings.Contains(out, "Left 1 container from before heedle labelled homes whose run this home's Temporal doesn't know") {
 		t.Errorf("heedle down -home A: %v\n%s", err, out)
 	}
 	if n := containers(); n[a.label] != 0 || n[b.label] != 1 || n[""] != 1 {
@@ -269,10 +277,10 @@ func TestE2EHomes_TwoAtOnce(t *testing.T) {
 
 	out, err = heedleRun(t, bin, env, "down", "-home", b.dir)
 	b.cmd.Wait()
-	if err != nil || !strings.Contains(out, "of this home's containers") {
+	if err != nil || !strings.Contains(out, "Left 1 container") {
 		t.Errorf("heedle down -home B: %v\n%s", err, out)
 	}
-	if n := containers(); len(n) != 0 {
+	if n := containers(); n[b.label] != 0 || n[""] != 1 || len(n) != 1 {
 		t.Errorf("after down for B, running containers by home: %v", n)
 	}
 	for _, addr := range []string{b.listen, fmt.Sprintf("127.0.0.1:%d", b.port)} {
