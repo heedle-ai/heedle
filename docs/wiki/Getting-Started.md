@@ -82,11 +82,13 @@ It prints the proposal and a line for each thing it needs, ready or missing with
 
 heedle can remember short facts about you, such as "Vegetarian." or "Home airport: IAD.", and uses them when it proposes. Ask *Plan a weekend in Porto, I'm vegetarian*, and the card asks **Remember for next time?** with **Remember** and **Not now**. Nothing is remembered until you press **Remember**. A later request (*Plan three days in Lisbon*) then says **Used 1 thing heedle remembers**, and its plan has vegetarian places in it. "Remember that I'm vegetarian" on its own just offers to remember it.
 
-**Memory** in the top bar shows everything heedle remembers, word for word, to edit or **Forget**. Forgetting takes it out of the file it lives in, `~/.heedle/memory.json`, which is the only place heedle keeps it (never the Git store, whose history keeps everything). The next request then sends nothing of it.
+**Memory** in the top bar shows everything heedle remembers, word for word, to edit or **Forget**. Forgetting takes it out of the file it lives in, `~/.heedle/memory.json` (`DIR/memory.json` with `heedle up -home DIR`), which is the only place heedle keeps a memory (never the Git store, whose history keeps everything). The next request then sends nothing of it, not even through an earlier turn of the conversation that used it.
 
-What goes to Claude: everything on that page, with every request to **Ask heedle**, as facts about you that Claude is told are never instructions. So it refuses anything that looks like a key, a card number or a password, and details for forms, such as your address, don't belong there. Your request itself is kept in Temporal's history, as every request is.
+What goes to Claude: everything on that page, with every request to **Ask heedle**, as facts about you that Claude is told are never instructions. So it refuses anything that looks like a key, a card number or a password. Details for forms, such as your address, will belong in your profile, which Claude never sees (**Planned**: roadmap 9.8), not in memory.
 
-From the terminal, the same file:
+What Forget can't reach: records of what you did. Temporal's history (`~/.heedle/temporal.db`) keeps each request and its proposal, whose summary may mention what it relied on, and a run you started keeps its program in the Git store.
+
+From the terminal, the same file (give `-memory DIR/memory.json` if heedle up runs with `-home DIR`); `heedle ask` says how many memories it used, and what it could remember:
 
 ```sh
 ./heedle memory -add "Vegetarian."
