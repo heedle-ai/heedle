@@ -39,7 +39,14 @@ Homebrew finds the tap (heedle-ai/homebrew-tap) by its name. This also installs 
 ./heedle up
 ```
 
-It prints where everything is: Temporal's address and Web UI, Temporal's log, and the UI's address. If another Temporal is already running on its ports (say, a `temporal server start-dev` from loom's Getting Started), it refuses: stop that one, or give `-temporal-port` and `-temporal-ui-port`. Open `http://127.0.0.1:8090` and run a program from **New run**, for example:
+It prints where everything is: Temporal's address and Web UI, Temporal's log, and the UI's address. If another Temporal is already running on its ports (say, a `temporal server start-dev` from loom's Getting Started), it refuses: stop that one, or give `-temporal-port` and `-temporal-ui-port`. It also refuses when Podman doesn't answer, which can happen on macOS after the Mac sleeps: restart Podman's machine, then run `heedle up` again:
+
+```sh
+podman machine stop
+podman machine start
+```
+
+The first time, it downloads heedle's three images (for browse, agent and act steps), a few hundred MB each. If a download fails, it says why and which steps won't run; `heedle up` again retries. Open `http://127.0.0.1:8090` and run a program from **New run**, for example:
 
 ```
 (pipe (par (echo "a") (echo "b")) echo)

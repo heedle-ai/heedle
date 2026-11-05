@@ -53,11 +53,17 @@ type system struct {
 	// procArgs is a process's command line, its arguments joined by
 	// spaces.
 	procArgs func(ctx context.Context, pid int) (string, error)
+	// podmanRetry is how long heedle up waits between asking Podman
+	// whether it answers.
+	podmanRetry time.Duration
 }
 
 func (s system) withDefaults(out io.Writer) system {
 	if s.goos == "" {
 		s.goos = runtime.GOOS
+	}
+	if s.podmanRetry == 0 {
+		s.podmanRetry = 2 * time.Second
 	}
 	if s.lookPath == nil {
 		s.lookPath = exec.LookPath
@@ -371,9 +377,48 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) (string, error)
 		fmt.Fprintln(out, "podman isn't on the PATH: container, agent and browse steps won't run (macOS: brew install podman; Linux: your package manager)")
 		return "", nil
 	}
-	if sys.goos != "darwin" {
-		return podman, nil
+	machine := ""
+	if sys.goos == "darwin" {
+		if machine, err = startMachine(ctx, sys, podman, out); err != nil {
+			return "", err
+		}
 	}
+	return podman, podmanAnswers(ctx, sys, podman, machine)
+}
+
+// podmanAnswers checks that Podman answers, not only that its machine
+// says it runs: a machine left "running" after the Mac slept, or after
+// its processes were killed, refuses every connection, and heedle went
+// on with no images and every browse step failing (Vinod, v0.2.4).
+// A machine still starting gets a minute.
+func podmanAnswers(ctx context.Context, sys system, podman, machine string) error {
+	var b []byte
+	var err error
+	for try := 0; try < 30; try++ {
+		if b, err = sys.combined(ctx, podman, "info", "--format", "{{.Host.Os}}"); err == nil || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(sys.podmanRetry):
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	why := reason(b, err)
+	if machine == "" {
+		if sys.goos == "darwin" {
+			return fmt.Errorf("podman doesn't answer (%s): restart its virtual machine with podman machine stop, then podman machine start, and run heedle up again", why)
+		}
+		return fmt.Errorf("podman doesn't answer (%s): check podman info works, then run heedle up again", why)
+	}
+	return fmt.Errorf("podman doesn't answer, though its virtual machine %s says it runs (%s): restart it with podman machine stop %s, then podman machine start %s, and run heedle up again", machine, why, machine, machine)
+}
+
+// startMachine makes sure Podman's virtual machine exists and runs, and
+// returns its name ("" for one it just made, which is the default).
+func startMachine(ctx context.Context, sys system, podman string, out io.Writer) (string, error) {
 	b, err := sys.output(ctx, podman, "machine", "list", "--format", "json")
 	if err != nil {
 		return "", fmt.Errorf("podman machine list: %w", err)
@@ -395,14 +440,14 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) (string, error)
 		if _, err := sys.output(ctx, podman, "machine", "start"); err != nil {
 			return "", fmt.Errorf("podman machine start: %w", err)
 		}
-		return podman, nil
+		return "", nil
 	}
 	// Podman runs one machine at a time; one already running or starting
 	// is used as it is (review 21).
 	name := machines[0].Name
 	for _, m := range machines {
 		if m.Running || m.Starting {
-			return podman, nil
+			return m.Name, nil
 		}
 		if m.Default {
 			name = m.Name
@@ -412,7 +457,7 @@ func checkPodman(ctx context.Context, sys system, out io.Writer) (string, error)
 	if _, err := sys.output(ctx, podman, "machine", "start", name); err != nil {
 		return "", fmt.Errorf("podman machine start %s: %w", name, err)
 	}
-	return podman, nil
+	return name, nil
 }
 
 // maxShown bounds the notifications shown at once; one more says how
