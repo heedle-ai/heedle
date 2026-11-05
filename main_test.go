@@ -160,7 +160,7 @@ func TestInv_UpStartsTemporalThenTheUI(t *testing.T) {
 	if strings.Join(m.served, " ") != strings.Join(want, " ") || m.stopped != 1 {
 		t.Errorf("served %q, Temporal stopped %d times", m.served, m.stopped)
 	}
-	if got := strings.Join(m.calls, "|"); got != "podman info --format {{.Host.Os}}|podman image exists "+pinned.Browser+"|podman image exists "+pinned.BrowserAgent {
+	if got := strings.Join(m.calls, "|"); got != "podman info --format {{.Host.Arch}}|podman image exists "+pinned.Browser+"|podman image exists "+pinned.BrowserAgent {
 		t.Errorf("on Linux, heedle up ran %q", got)
 	}
 
