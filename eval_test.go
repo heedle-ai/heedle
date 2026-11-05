@@ -145,8 +145,11 @@ func TestEval_Course(t *testing.T) {
 	s := score{Release: release, Date: time.Now().UTC().Format("2006-01-02"), Model: model, Course: courseHash(t)}
 	start := time.Now()
 	for _, name := range c.names() {
+		// A person who sends every form Claude asks about (roadmap 9.7): a
+		// form Claude sends without asking is held, and not completed.
+		asked := 0
 		act := pirn.Act{Claude: pirn.Claude{APIKey: key, Model: model},
-			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img}
+			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
 		rec, err := tryAct(t, act, c.program(name))
 		if err != nil {
 			// One form's failure (a rate limit, say) is that form not
@@ -168,7 +171,7 @@ func TestEval_Course(t *testing.T) {
 				s.Completed++
 			}
 		}
-		t.Logf("%s: done %v, ended %s, %d actions, %d tokens", name, got.Done, rec.Ended, len(rec.Calls), rec.InputTokens+rec.OutputTokens)
+		t.Logf("%s: done %v, ended %s, %d actions, %d tokens, asked %d, held %d", name, got.Done, rec.Ended, len(rec.Calls), rec.InputTokens+rec.OutputTokens, asked, rec.HeldTotal)
 	}
 	s.Took = time.Since(start)
 	s.Decoy = c.hits()

