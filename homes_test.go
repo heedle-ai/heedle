@@ -145,6 +145,16 @@ func TestInv_DownTouchesOnlyThisHome(t *testing.T) {
 	if err := cleanStart(ctx, homeC, sys, io.Discard); err == nil || !running(stD.PID) {
 		t.Errorf("the clean start with a copied up.json: %v", err)
 	}
+	// But this home's own, named relatively (a heedle from before 9.2.1)
+	// or through a link, is this home's (review 55).
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(homeC, link)
+	for _, h := range []string{"rel/home", link} {
+		writeUpState(homeC, upState{PID: 1 << 22, Args: []string{"x"}, Home: h})
+		if st, err := readHomeState(homeC); err != nil || st == nil {
+			t.Errorf("up.json naming this home as %q: %v", h, err)
+		}
+	}
 	// Exact arguments: a database whose name only starts with this one's
 	// is another's.
 	db := filepath.Join(homeA, "temporal.db")
@@ -345,6 +355,37 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, upFile)); err != nil {
 		t.Error("up.json went while Temporal still answers")
+	}
+	// Review 55: a stale up.json (the machine restarted) whose port
+	// another home's Temporal now answers on doesn't hold this home back:
+	// down and the clean start say whose it is, leave it running, and
+	// remove the stale up.json.
+	for _, step := range []string{"down", "clean start"} {
+		home, other, port := t.TempDir(), t.TempDir(), freePort(t)
+		self, _ := os.Executable()
+		cmd := exec.Command(self, append([]string{"-test.run=^$", "--"}, temporalArgs(other)...)...)
+		cmd.Env = append(os.Environ(), "HEEDLE_STANDIN=1", fmt.Sprintf("HEEDLE_STANDIN_LISTEN=%d", port))
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		for i := 0; i < 250 && !answersAt(port); i++ {
+			time.Sleep(20 * time.Millisecond)
+		}
+		st := upState{PID: 1 << 22, Args: []string{"/usr/local/bin/heedle", "up"}, Home: home, TemporalPort: port}
+		st.Temporal.PID, st.Temporal.Args = 1<<22, append([]string{"/usr/local/bin/temporal"}, temporalArgs(home)...)
+		writeUpState(home, st)
+		var out bytes.Buffer
+		var err error
+		if step == "down" {
+			err = down(ctx, []string{"-home", home}, &out, real)
+		} else {
+			err = cleanStart(ctx, home, real, &out)
+		}
+		_, gone := os.Stat(filepath.Join(home, upFile))
+		if err != nil || !strings.Contains(out.String(), "is another home's (its database is "+filepath.Join(other, "temporal.db")+")") || !running(cmd.Process.Pid) || gone == nil {
+			t.Errorf("%s with another home's Temporal on the stale port: %v (it runs %v, up.json gone %v)\n%s", step, err, running(cmd.Process.Pid), gone != nil, out.String())
+		}
 	}
 }
 
