@@ -94,6 +94,31 @@ From the terminal, with `heedle up` running:
 
 It prints the proposal and a line for each thing it needs, ready or missing with how to set it up. `-then run` runs it and `-then schedule` schedules it as proposed, each only when everything it needs is ready.
 
+## What heedle remembers
+
+heedle can remember short facts about you, such as "Vegetarian." or "Home airport: IAD.", and uses them when it proposes. Ask *Plan a weekend in Porto, I'm vegetarian*, and the card asks **Remember for next time?** with **Remember** and **Not now**. Nothing is remembered until you press **Remember**. A later request (*Plan three days in Lisbon*) then says **Used 1 thing heedle remembers**, and its plan has vegetarian places in it. "Remember that I'm vegetarian" on its own just offers to remember it.
+
+**Memory** in the top bar shows everything heedle remembers, word for word, to edit or **Forget**. Forgetting takes it out of the file it lives in, `~/.heedle/memory.json`, which is the only place heedle keeps it (never the Git store, whose history keeps everything). The next request then sends nothing of it.
+
+What goes to Claude: everything on that page, with every request to **Ask heedle**, as facts about you that Claude is told are never instructions. So it refuses anything that looks like a key, a card number or a password, and details for forms, such as your address, don't belong there. Your request itself is kept in Temporal's history, as every request is.
+
+From the terminal, the same file:
+
+```sh
+./heedle memory -add "Vegetarian."
+./heedle memory
+./heedle memory -forget mf7c02e89921e
+```
+
+```
+remembered mf7c02e89921e: Vegetarian.
+heedle remembers, and sends to Claude with every request (/Users/you/.heedle/memory.json):
+  mf7c02e89921e  added 2026-11-05, never used  Vegetarian.
+forgot mf7c02e89921e; it's gone from /Users/you/.heedle/memory.json
+```
+
+`./heedle memory -forget-all` forgets everything.
+
 ## Notifications
 
 While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
