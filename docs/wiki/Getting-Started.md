@@ -123,7 +123,7 @@ forgot mf7c02e89921e; it's gone from /Users/you/.heedle/memory.json
 
 ## Notifications
 
-While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. When a schedule's monthly budget stops a run, it tells you once that the schedule is paused and why, with the address of the schedules page, and again when a new month resumes it, if you ticked that. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
+While `heedle up` runs, it tells you with your system's own notifications when a scheduled run ends (and, if it failed, that its schedule is paused until you look) and when a write waits for your approval, each once, with the address of the run. When a schedule's monthly budget stops a run, it tells you once that the schedule is paused and why, with the address of the schedules page. On macOS it uses `osascript`; on Linux `notify-send` (Debian and Ubuntu: `sudo apt install libnotify-bin`). A run you start yourself doesn't notify. When many things happen at once, it shows five and one more saying how many others there are. If it can't reach Temporal it says so once in its output. `heedle up -notify=false` turns them off.
 
 ## Run programs from the terminal
 
@@ -177,7 +177,7 @@ To correct a price, put the models you want to change in `~/.heedle/prices.json`
 printf '{"models": {"claude-sonnet-5-5": {"input": 2, "output": 10}}}\n' > ~/.heedle/prices.json
 ```
 
-**Give a schedule a monthly budget** on the schedules page, or from the terminal. Before each run of it starts anything, the worker adds up the schedule's runs this month, in its time zone; at or over the budget, the run starts nothing and the schedule is paused, saying so, and you're told. Raise the budget to let it run again, or tick **resume in a new month**. A budget can't stop a run already going, so one run can go over it.
+**Give a schedule a monthly budget** on the schedules page, or from the terminal. Before each run of it starts anything, the worker adds up the schedule's runs this month, in its time zone; at or over the budget, the run starts nothing and the schedule is paused, saying so, and you're told. Raise the budget to let it run again, or tick **resume in a new month**. A budget can't stop a run already going, so one run can go over it, and it counts only what runs recorded: a run that fails, or a retried step, isn't counted.
 
 ```sh
 ./heedle schedule -name weekday-digest -cron "0 9 * * 1-5" -tz Europe/Lisbon -budget 5 -resume-next-month '(pipe (echo "weekly digest") echo)'
