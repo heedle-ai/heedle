@@ -205,7 +205,7 @@ To correct a price, put the models you want to change in `~/.heedle/prices.json`
 printf '{"models": {"claude-sonnet-5-5": {"input": 2, "output": 10}}}\n' > ~/.heedle/prices.json
 ```
 
-**Give a schedule a monthly budget** on the schedules page, or from the terminal. Before each run of it starts anything, the worker adds up the schedule's runs this month, in its time zone; at or over the budget, the run starts nothing and the schedule is paused, saying so, and you're told. Raise the budget to let it run again, or tick **resume in a new month**. A budget can't stop a run already going, so one run can go over it, and it counts only what runs recorded: a run that fails, or a retried step, isn't counted.
+**Give a schedule a monthly budget** on the schedules page, or from the terminal. Before each run of it starts anything, the worker adds up the schedule's runs this month, in its time zone; at or over the budget, the run starts nothing and the schedule is paused, saying so, and you're told. Raise the budget to let it run again, or tick **resume in a new month**. A budget can't stop a run already going, so one run can go over it. It counts every call to Claude the schedule's runs made, once: what their records hold, and from the usage ledger, calls no record holds, such as a run that failed or a step that was tried again. The **Costs** page counts the front door's asks too ([loom → Costs and budgets](https://github.com/heedle-ai/loom/wiki/How-It-Works#costs-and-budgets)).
 
 ```sh
 ./heedle schedule -name weekday-digest -cron "0 9 * * 1-5" -tz Europe/Lisbon -budget 5 -resume-next-month '(pipe (echo "weekly digest") echo)'
