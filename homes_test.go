@@ -543,7 +543,7 @@ func TestInv_TestsNeverReachTheMachinesPodman(t *testing.T) {
 		t.Errorf("the tests' podman (%s) is the machine's: %v\n%s", p, err, out)
 	}
 	files, _ := filepath.Glob("*_test.go")
-	allowed := map[string]bool{"TestE2EImages_Browse": true, "TestE2EAct_FillsAForm": true, "TestE2ECourse_StandIn": true, "TestE2EProfile_LeavesNoValue": true, "TestE2EHomes_TwoAtOnce": true}
+	allowed := map[string]bool{"TestE2EImages_Browse": true, "TestE2EAct_FillsAForm": true, "TestE2ECourse_StandIn": true, "TestE2EProfile_LeavesNoValue": true, "TestE2EHomes_TwoAtOnce": true, "TestE2EReplay_RenamedFieldHandsOver": true, "TestE2EReplay_CardFrameStops": true}
 	fn := regexp.MustCompile(`(?m)^func (\w+)\(`)
 	ident := regexp.MustCompile(`\bmachinePodman\b`)
 	lit := regexp.MustCompile("[\"`][^\"`\n]*/podman[\"`]")

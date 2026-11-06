@@ -64,10 +64,6 @@ type course struct {
 // browser-agent image, downloaded if Podman doesn't have it.
 func browserAgentImage(t *testing.T) string {
 	t.Helper()
-	// The image is the machine's Podman's, so every test that needs it
-	// runs with that podman, not the guard (HEEDLE-530): 9.9's replay
-	// tests, written before the guard, failed in CI after the merge.
-	machinePodmanOnPath(t)
 	if img := os.Getenv("HEEDLE_E2E_ACT_IMAGE"); img != "" {
 		return img
 	}
@@ -784,6 +780,7 @@ func TestE2EReplay_RenamedFieldHandsOver(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := browserAgentImage(t)
 	store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
 	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
@@ -832,6 +829,7 @@ func TestE2EReplay_CardFrameStops(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := browserAgentImage(t)
 	store := must2(warp.Init(ctx, filepath.Join(t.TempDir(), "store.git")))
 	tb := func(label, v string) map[string]any { return field("textbox", label, v) }
