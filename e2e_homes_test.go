@@ -29,7 +29,8 @@ func heedleBin(t *testing.T) string {
 // containers, for end-to-end tests that need no Podman (HEEDLE-530).
 func noContainers(t *testing.T) string {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "podman"), []byte("#!/bin/sh\ncase \"$1\" in ps|images) echo '[]';; esac\nexit 0\n"), 0o755)
+	// On macOS heedle up asks for Podman's machine first: one runs.
+	os.WriteFile(filepath.Join(dir, "podman"), []byte("#!/bin/sh\ncase \"$1\" in ps|images) echo '[]';; machine) echo '[{\"Name\":\"podman-machine-default\",\"Default\":true,\"Running\":true}]';; esac\nexit 0\n"), 0o755)
 	return dir
 }
 
