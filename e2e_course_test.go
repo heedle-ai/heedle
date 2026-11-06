@@ -64,6 +64,10 @@ type course struct {
 // browser-agent image, downloaded if Podman doesn't have it.
 func browserAgentImage(t *testing.T) string {
 	t.Helper()
+	// The image is the machine's Podman's, so every test that needs it
+	// runs with that podman, not the guard (HEEDLE-530): 9.9's replay
+	// tests, written before the guard, failed in CI after the merge.
+	machinePodmanOnPath(t)
 	if img := os.Getenv("HEEDLE_E2E_ACT_IMAGE"); img != "" {
 		return img
 	}
