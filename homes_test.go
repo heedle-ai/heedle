@@ -404,7 +404,11 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		// Reaped here as it exits: macOS's ps still names a child that
+		// exited and wasn't reaped, so running() would say it runs.
+		exited := make(chan struct{})
+		go func() { cmd.Wait(); close(exited) }()
+		t.Cleanup(func() { cmd.Process.Kill(); <-exited })
 		for i := 0; i < 250 && !answersAt(port); i++ {
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -418,8 +422,14 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 		} else {
 			err = cleanStart(ctx, home, real, &out)
 		}
-		if err != nil || running(cmd.Process.Pid) || strings.Contains(out.String(), "is another home's") {
-			t.Errorf("%s of a home spelt through a link: %v (its Temporal running %v)\n%s", step, err, running(cmd.Process.Pid), out.String())
+		stopped := false
+		select {
+		case <-exited:
+			stopped = true
+		case <-time.After(5 * time.Second):
+		}
+		if err != nil || !stopped || strings.Contains(out.String(), "is another home's") {
+			t.Errorf("%s of a home spelt through a link: %v (its Temporal stopped %v)\n%s", step, err, stopped, out.String())
 		}
 	}
 
@@ -488,7 +498,9 @@ func TestInv_ContainersAreThisHomes(t *testing.T) {
 	wd, _ := os.Getwd()
 	defer os.Chdir(wd)
 	os.Chdir(filepath.Dir(home))
-	if h, _, _ := homeArg([]string{"-home", filepath.Base(home)}); h != home {
+	// sameDir: on macOS the working folder comes back with /var's link
+	// resolved (/private/var), and t.TempDir's doesn't.
+	if h, _, _ := homeArg([]string{"-home", filepath.Base(home)}); !filepath.IsAbs(h) || !sameDir(h, home) {
 		t.Errorf("a relative -home is %q, not %q", h, home)
 	}
 }
