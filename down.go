@@ -212,6 +212,8 @@ func ourTemporal(ctx context.Context, sys system, st *upState, home string) bool
 	if i < 0 || i+1 >= len(st.Temporal.Args) || !homeDB(st.Temporal.Args[i+1], home) || !slices.Contains(st.Temporal.Args, "start-dev") {
 		return false
 	}
+	// The command line the system reported must say so too (HEEDLE-509),
+	// and the process must still be exactly it.
 	line := st.temporalLine()
 	if !devServerOf(line, home) {
 		return false
@@ -239,15 +241,31 @@ func devServerOf(line, home string) bool {
 	return strings.Contains(line+" ", " start-dev ") && homeDB(dbArg(line), home)
 }
 
-// dbArg is the --db-filename argument of line: up to the next flag (" -"),
-// so a path with spaces is read whole; "" without one.
+// dbArg is the --db-filename argument of line. The command line is its
+// arguments joined by spaces, so the value runs to some later " -": the
+// shortest such value that is an existing file named temporal.db, else
+// the shortest (a path may hold spaces and " -"; review 55). "" without
+// one.
 func dbArg(line string) string {
 	_, rest, ok := strings.Cut(line+" ", " --db-filename ")
 	if !ok {
 		return ""
 	}
-	db, _, _ := strings.Cut(rest, " -")
-	return strings.TrimSpace(db)
+	rest = strings.TrimSpace(rest)
+	first := ""
+	for i := 0; i <= len(rest); i++ {
+		if i < len(rest) && !strings.HasPrefix(rest[i:], " -") {
+			continue
+		}
+		db := rest[:i]
+		if first == "" {
+			first = db
+		}
+		if fi, err := os.Stat(db); err == nil && fi.Mode().IsRegular() && filepath.Base(db) == "temporal.db" {
+			return db
+		}
+	}
+	return first
 }
 
 // homeDB reports whether db is home's database: a file temporal.db in
@@ -284,6 +302,10 @@ func othersTemporal(ctx context.Context, sys system, st *upState, home string) (
 	}
 	db := dbArg(line)
 	if err != nil || devServerOf(line, home) || !strings.Contains(line+" ", " start-dev ") || !filepath.IsAbs(db) {
+		return "", false
+	}
+	// Only a database that is there names another home (review 55).
+	if fi, err := os.Stat(db); err != nil || !fi.Mode().IsRegular() {
 		return "", false
 	}
 	return db, true

@@ -86,7 +86,13 @@ func machinePodmanOnPath(t *testing.T) {
 	if machinePodman == "" {
 		t.Fatal("podman isn't on the PATH")
 	}
-	t.Setenv("PATH", filepath.Dir(machinePodman)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// A folder holding only podman, so nothing else of its folder (an
+	// older go, say) comes first too (review 55).
+	dir := t.TempDir()
+	if err := os.Symlink(machinePodman, filepath.Join(dir, "podman")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // standIn starts the test binary as a stand-in with the given arguments

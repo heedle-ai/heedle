@@ -179,6 +179,14 @@ func TestInv_DownTouchesOnlyThisHome(t *testing.T) {
 	if got := dbArg("/t server start-dev --db-filename /a b/temporal.db -f x"); got != "/a b/temporal.db" {
 		t.Errorf("dbArg = %q", got)
 	}
+	// A home whose path holds " -" (review 55 round 5): the database that
+	// is there is read whole.
+	odd := filepath.Join(t.TempDir(), "my -home")
+	os.MkdirAll(odd, 0o700)
+	os.WriteFile(filepath.Join(odd, "temporal.db"), nil, 0o600)
+	if got := dbArg("/t server start-dev --db-filename " + filepath.Join(odd, "temporal.db") + " --log-level warn"); got != filepath.Join(odd, "temporal.db") || !devServerOf("/t server start-dev --db-filename "+filepath.Join(odd, "temporal.db")+" --log-level warn", odd) {
+		t.Errorf("dbArg with \" -\" in the home = %q", got)
+	}
 }
 
 // TestInv_UpStopsIfOtherHomesCantSeeIt: heedle up that can't say its home
@@ -421,6 +429,7 @@ func TestInv_WrapperStartedTemporalIsStopped(t *testing.T) {
 	// remove the stale up.json.
 	for _, step := range []string{"down", "clean start"} {
 		home, other, port := t.TempDir(), t.TempDir(), freePort(t)
+		os.WriteFile(filepath.Join(other, "temporal.db"), nil, 0o600) // its database is there
 		self, _ := os.Executable()
 		cmd := exec.Command(self, append([]string{"-test.run=^$", "--"}, temporalArgs(other)...)...)
 		cmd.Env = append(os.Environ(), "HEEDLE_STANDIN=1", fmt.Sprintf("HEEDLE_STANDIN_LISTEN=%d", port))
@@ -524,6 +533,8 @@ func TestInv_TestsNeverReachTheMachinesPodman(t *testing.T) {
 	files, _ := filepath.Glob("*_test.go")
 	allowed := map[string]bool{"TestE2EImages_Browse": true, "TestE2EAct_FillsAForm": true, "TestE2ECourse_StandIn": true, "TestE2EProfile_LeavesNoValue": true, "TestE2EHomes_TwoAtOnce": true}
 	fn := regexp.MustCompile(`(?m)^func (\w+)\(`)
+	ident := regexp.MustCompile(`\bmachinePodman\b`)
+	lit := regexp.MustCompile("[\"`][^\"`\n]*/podman[\"`]")
 	for _, f := range files {
 		b, _ := os.ReadFile(f)
 		src := string(b)
@@ -533,9 +544,19 @@ func TestInv_TestsNeverReachTheMachinesPodman(t *testing.T) {
 			if i+1 < len(locs) {
 				end = locs[i+1][0]
 			}
-			name := src[l[2]:l[3]]
-			if strings.Contains(src[l[0]:end], "machinePodmanOnPath(t)") && name != "machinePodmanOnPath" && name != "TestInv_TestsNeverReachTheMachinesPodman" && !allowed[name] {
-				t.Errorf("%s: %s puts the machine's podman on its PATH, but isn't a Podman end-to-end test", f, name)
+			name, body := src[l[2]:l[3]], src[l[0]:end]
+			if name == "TestMain" || name == "machinePodmanOnPath" || name == "TestInv_TestsNeverReachTheMachinesPodman" {
+				continue
+			}
+			// Comments aside, the machine's podman is reached only through
+			// machinePodmanOnPath, by the allowed tests (review 55: any
+			// use of machinePodman, or a literal path to a podman).
+			code := regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(body, "")
+			if (strings.Contains(code, "machinePodmanOnPath(t)") && !allowed[name]) || ident.MatchString(strings.ReplaceAll(code, "machinePodmanOnPath", "")) {
+				t.Errorf("%s: %s reaches the machine's podman, but isn't a Podman end-to-end test", f, name)
+			}
+			if lit.MatchString(code) {
+				t.Errorf("%s: %s names a podman by its path", f, name)
 			}
 		}
 	}
