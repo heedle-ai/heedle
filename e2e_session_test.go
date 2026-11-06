@@ -44,6 +44,7 @@ func TestE2ESession_KeptSignIn(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E_ACT") != "1" {
 		t.Skip("set HEEDLE_E2E_ACT=1 to run the course of forms with the browser-agent image")
 	}
+	machinePodmanOnPath(t)
 	img := browserAgentImage(t)
 	c := startCourse(t)
 	vault := keys{}
