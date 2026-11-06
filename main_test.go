@@ -476,6 +476,9 @@ func TestE2E_Up(t *testing.T) {
 	if os.Getenv("HEEDLE_E2E") != "1" {
 		t.Skip("set HEEDLE_E2E=1 to run heedle up against a real Temporal server")
 	}
+	// A podman with every image and no containers: this test needs no
+	// Podman, and never reaches the machine's (HEEDLE-530).
+	t.Setenv("PATH", noContainers(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	c, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))

@@ -311,9 +311,21 @@ func othersTemporal(ctx context.Context, sys system, st *upState, home string) (
 	return db, true
 }
 
-// portAnswers reports whether st's Temporal port answers.
+// portAnswers reports whether st's Temporal port still answers, giving a
+// process just stopped up to five seconds to let go of it: its command
+// line can go before its socket does.
 func (st *upState) portAnswers() bool {
-	return st.TemporalPort > 0 && answers(net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)))
+	if st.TemporalPort <= 0 {
+		return false
+	}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort))
+	for i := 0; i < 50; i++ {
+		if !answers(addr) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return true
 }
 
 // listening is the process that listens on 127.0.0.1:port, as lsof
@@ -497,7 +509,7 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 	// (review 55).
 	podman, perr := sys.lookPath("podman")
 	known := map[string]bool{}
-	if st != nil && perr == nil && st.portAnswers() {
+	if st != nil && perr == nil && st.TemporalPort > 0 && answers(net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort))) {
 		known = knownOld(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(st.TemporalPort)), podman)
 	}
 	if st != nil {
@@ -536,13 +548,14 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 		// up.json stays, and the next heedle down says so again (roadmap
 		// 9.2.1, review 55).
 		db, others := "", false
-		if st.portAnswers() {
+		busy := st.portAnswers()
+		if busy {
 			db, others = othersTemporal(ctx, sys, st, *home)
 		}
 		if others {
 			fmt.Fprintf(out, "The Temporal on port %d is another home's (its database is %s); it was left running.\n", st.TemporalPort, db)
 		}
-		if st.portAnswers() && !others {
+		if busy && !others {
 			still = errStillAnswers(ctx, sys, st.TemporalPort)
 			if len(did) > 0 && !temporal {
 				did[len(did)-1] = strings.TrimSuffix(did[len(did)-1], ", with its Temporal")
