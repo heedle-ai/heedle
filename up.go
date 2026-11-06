@@ -310,7 +310,7 @@ func up(ctx context.Context, args []string, out io.Writer, sys system) error {
 		}
 		stop()
 		unregister()
-		if answers(hostPort) {
+		if st.portAnswers() {
 			// Never leave without saying Temporal outlived heedle; up.json
 			// stays, so heedle down can say so too.
 			fmt.Fprintf(out, "Temporal still answers on %s after heedle stopped it; stop it yourself (heedle down -home %s says which process)\n", hostPort, *home)
