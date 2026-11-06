@@ -474,6 +474,12 @@ func plural(n int) string {
 	return "s"
 }
 
+// DownGrace is how long heedle down lets heedle up stop before it
+// interrupts it again (which ends it at once): longer than its worker
+// lets running steps finish and note their calls in the usage ledger
+// (loom.WorkerStopTimeout), with time to stop Temporal after.
+const DownGrace = loom.WorkerStopTimeout + 30*time.Second
+
 // down stops what heedle up started from home: heedle up itself (which
 // stops its worker, UI and Temporal), Temporal if it outlived it (the
 // process heedle started, and the one answering on its port if a wrapper
@@ -514,7 +520,7 @@ func down(ctx context.Context, args []string, out io.Writer, sys system) error {
 	}
 	if st != nil {
 		if line := strings.Join(st.Args, " "); isProcess(ctx, sys, st.PID, line) {
-			if !stopProcess(ctx, sys, st.PID, line, time.Minute, false) {
+			if !stopProcess(ctx, sys, st.PID, line, DownGrace, false) {
 				return fmt.Errorf("heedle (pid %d) didn't stop", st.PID)
 			}
 			did = append(did, fmt.Sprintf("heedle (pid %d, %s) and its worker", st.PID, st.UI))
