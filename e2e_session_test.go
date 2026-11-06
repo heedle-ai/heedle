@@ -127,7 +127,7 @@ func TestE2ESession_KeptSignIn(t *testing.T) {
 			}
 		}
 		time.Sleep(time.Second)
-		w.HandBack(true)
+		w.HandBack(true, "forms-srv")
 	}, open(t, "password"), func([]string) string {
 		return `{"type":"tool_use","id":"p1","name":"ask_person","input":{"reason":"The form asks you to sign in."}}`
 	}, say("You signed in.\nResult: finished"))
@@ -138,9 +138,17 @@ func TestE2ESession_KeptSignIn(t *testing.T) {
 	if err != nil || strings.Contains(string(file), "member-") || strings.Contains(string(file), "course-password") || len(vault) != 1 {
 		t.Fatalf("the kept file: %v %s; keys %d", err, file, len(vault))
 	}
-	// A later run, another program on that site: signed in.
+	// A later run of a program that doesn't say :signed-in: signed out,
+	// with the sign-in kept (review 53).
+	var unnamed []string
+	rec = run(`(act "Check that I'm signed in." "http://forms-srv:8080/whoami/password")`, &unnamed, nil,
+		tool(t, "browser_navigate", map[string]any{"url": "http://forms-srv:8080/whoami/password"}), snapshot(t), say("You are signed out.\nResult: finished"))
+	if len(rec.SignedIn) != 0 || !strings.Contains(strings.Join(unnamed, "\n"), "Not signed in") {
+		t.Errorf("a program not signed in: %v", rec.SignedIn)
+	}
+	// A later run, another program on that site that says so: signed in.
 	var second []string
-	rec = run(`(act "Check that I'm signed in." "http://forms-srv:8080/whoami/password")`, &second, nil,
+	rec = run(`(act "Check that I'm signed in." "http://forms-srv:8080/whoami/password" :signed-in "forms-srv")`, &second, nil,
 		tool(t, "browser_navigate", map[string]any{"url": "http://forms-srv:8080/whoami/password"}), snapshot(t), say("You are signed in.\nResult: finished"))
 	if strings.Join(rec.SignedIn, " ") != "forms-srv" || !strings.Contains(strings.Join(second, "\n"), "Signed in as a course member") {
 		t.Errorf("second run: signed in %v; Claude saw %s", rec.SignedIn, strings.Join(second, "\n"))
@@ -150,13 +158,13 @@ func TestE2ESession_KeptSignIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var third []string
-	rec = run(`(act "Check that I'm signed in." "http://forms-srv:8080/whoami/password")`, &third, nil,
+	rec = run(`(act "Check that I'm signed in." "http://forms-srv:8080/whoami/password" :signed-in "forms-srv")`, &third, nil,
 		tool(t, "browser_navigate", map[string]any{"url": "http://forms-srv:8080/whoami/password"}), snapshot(t), say("You are signed out.\nResult: finished"))
 	if len(rec.SignedIn) != 0 || !strings.Contains(strings.Join(third, "\n"), "Not signed in") || len(vault) != 0 {
 		t.Errorf("after Forget: signed in %v; keys %d; Claude saw %s", rec.SignedIn, len(vault), strings.Join(third, "\n"))
 	}
 	// The cookie is nowhere it would show.
-	all := map[string]string{"Temporal and the stores": kept.String(), "the logs": logs.String(), "Claude's requests": strings.Join(append(append(first, second...), third...), "\n")}
+	all := map[string]string{"Temporal and the stores": kept.String(), "the logs": logs.String(), "Claude's requests": strings.Join(append(append(append(first, unnamed...), second...), third...), "\n")}
 	for where, text := range all {
 		if strings.Contains(text, "member-"+courseToken) {
 			t.Errorf("the sign-in's cookie is in %s", where)
