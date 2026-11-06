@@ -171,7 +171,7 @@ jobs:
         env:
           HEEDLE_E2E_ACT: "1"
         run: |
-          go test -count=1 -v -run 'TestE2ECourse_StandIn|TestE2EProfile_LeavesNoValue|TestE2EReplay_|TestE2EWheel_' . | tee e2e-course.log
+          go test -count=1 -v -run 'TestE2ECourse_StandIn|TestE2EProfile_LeavesNoValue|TestE2EReplay_|TestE2EWheel_|TestE2ESession_' . | tee e2e-course.log
           if grep -q -- '--- SKIP' e2e-course.log; then echo 'a test skipped'; exit 1; fi
           for form in conditional contact iframe injection password password-tricks widgets wizard; do
             grep -q -- "--- PASS: TestE2ECourse_StandIn/$form" e2e-course.log
@@ -182,6 +182,7 @@ jobs:
           grep -q -- '--- PASS: TestE2EReplay_CardFrameStops ' e2e-course.log
           grep -q -- 'course, second run: 6 of 7 forms replayed without Claude' e2e-course.log
           grep -q -- '--- PASS: TestE2EWheel_PersonSignsIn ' e2e-course.log
+          grep -q -- '--- PASS: TestE2ESession_KeptSignIn ' e2e-course.log
       - name: release
         # The GoReleaser configuration is valid and builds exactly the
         # supported platforms; nothing is published (release.yml does

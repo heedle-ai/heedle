@@ -104,7 +104,7 @@ func TestE2EWheel_PersonSignsIn(t *testing.T) {
 			}
 			key("Enter")
 			time.Sleep(time.Second)
-			w.HandBack()
+			w.HandBack(false)
 		}(b.Wheel.ID)
 	})
 	env.SetOnActivityCompletedListener(func(_ *activity.Info, result converter.EncodedValue, err error) {
