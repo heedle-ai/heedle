@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/heedle-ai/bobbin"
+	"github.com/heedle-ai/loom"
 )
 
 // TestMain lets the test binary stand in for a process heedle may stop:
@@ -550,5 +551,23 @@ func TestE2E_KillThenUpThenDown(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, upFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Error("up.json outlived heedle down")
+	}
+}
+
+// TestInv_DownWaitsForTheWorkersSteps: heedle down lets heedle up stop
+// for longer than its worker lets running steps finish and note their
+// calls in loom's usage ledger (loom.WorkerStopTimeout), before it
+// interrupts it again, which ends it at once (HEEDLE-321, review 56
+// round 2).
+func TestInv_DownWaitsForTheWorkersSteps(t *testing.T) {
+	if DownGrace <= loom.WorkerStopTimeout {
+		t.Errorf("heedle down waits %v, its worker's steps %v", DownGrace, loom.WorkerStopTimeout)
+	}
+	b, err := os.ReadFile("down.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "stopProcess(ctx, sys, st.PID, line, DownGrace, false)") {
+		t.Error("heedle down doesn't wait DownGrace for heedle up")
 	}
 }
