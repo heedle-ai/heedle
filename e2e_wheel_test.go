@@ -84,8 +84,20 @@ func TestE2EWheel_PersonSignsIn(t *testing.T) {
 			}
 			key("Tab")
 			for _, f := range []string{"email", "password", "address"} {
-				for _, ch := range strings.Split(typed[f], "") {
-					key(ch)
+				chars := strings.Split(typed[f], "")
+				if f == "email" {
+					// A typo, fixed through Playwright MCP's real keyboard:
+					// the third character left out, then put back (review 52).
+					for _, ch := range append(chars[:2:2], chars[3:]...) {
+						key(ch)
+					}
+					for _, k := range []string{"Home", "ArrowRight", "ArrowRight", chars[2], "End"} {
+						key(k)
+					}
+				} else {
+					for _, ch := range chars {
+						key(ch)
+					}
 				}
 				key("Tab")
 			}
