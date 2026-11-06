@@ -570,4 +570,12 @@ func TestInv_DownWaitsForTheWorkersSteps(t *testing.T) {
 	if !strings.Contains(string(b), "stopProcess(ctx, sys, st.PID, line, DownGrace, false)") {
 		t.Error("heedle down doesn't wait DownGrace for heedle up")
 	}
+	// A heedle that stops at once (nothing running) is waited for no
+	// longer (review 56 round 3).
+	pid, argv := standIn(t, false, "up")
+	sys := system{goos: goos()}.withDefaults(io.Discard)
+	start := time.Now()
+	if !stopProcess(ctx, sys, pid, strings.Join(argv, " "), DownGrace, false) || time.Since(start) > 5*time.Second {
+		t.Errorf("an idle heedle took %v to stop", time.Since(start))
+	}
 }
