@@ -752,3 +752,17 @@ func TestInv_BudgetNoticesOpenTheSchedules(t *testing.T) {
 		t.Errorf("run: %s", got)
 	}
 }
+
+// TestInv_WikiCountsEveryCall: Getting Started says budgets and the
+// Costs page count every call once, from records and the usage ledger,
+// and no longer that failed runs or retries aren't counted (HEEDLE-320,
+// roadmap 10.4.1).
+func TestInv_WikiCountsEveryCall(t *testing.T) {
+	b, err := os.ReadFile("docs/wiki/Getting-Started.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "It counts every call to Claude the schedule's runs made, once") || strings.Contains(string(b), "isn't counted") {
+		t.Error("Getting-Started.md doesn't say every call is counted once")
+	}
+}
