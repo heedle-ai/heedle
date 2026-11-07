@@ -4,6 +4,8 @@ A personal AI that runs on your own machine, and shows you what it will do befor
 
 You ask in plain English. Claude writes a small program: browse these sites, ask a question about what they say, fill in this form, run this skill. You see the program, and what each step may touch, before anything runs. It runs on [Temporal](https://temporal.io), every run is a commit in Git, and every browser runs in a throwaway [Podman](https://podman.io) container that can reach only the sites the program names.
 
+**[Watch the 12-minute demo](https://youtu.be/46uFJjFsT7o)** (the browser agent starts at [7:43](https://youtu.be/46uFJjFsT7o?t=463)).
+
 - **Browsers side by side.** Several browsing steps run at once, and you watch each one live.
 - **Forms stop before they send.** An act step fills a form, then waits: nothing is submitted until you press Send.
 - **Your details stay yours.** Your name, email and address live in your keychain. Claude sees placeholders; heedle types the real values inside the browser.
