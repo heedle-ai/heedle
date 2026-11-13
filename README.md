@@ -52,7 +52,7 @@ The [testing roadmap](https://github.com/heedle-ai/heedle/issues?q=is%3Aissue+la
 
 ### How heedle is built
 
-Most, if not all, of the code was written by Claude (Anthropic's model), working in Claude Code. The author designed every component and checked each design by hand. Every change goes through its repository's tests and CI, and significant changes get an independent review by a fresh Claude session before they're merged. Every mistake a review or a test finds becomes a written invariant with a test that guards it. Commits are authored by the author and co-authored by Claude.
+Most, if not all, of the code was written by Claude (Anthropic's model), working in Claude Code. The author designed every component and checked each design by hand. Every change goes through its repository's tests and CI, and significant changes get an independent review by a fresh Claude session before they're merged. Every mistake a review or a test finds becomes a written invariant with a test that guards it.
 
 ## Help wanted
 
